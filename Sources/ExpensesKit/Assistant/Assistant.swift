@@ -10,6 +10,20 @@ public actor Assistant {
     let today: Day
     public let maxRounds: Int
     private var history: [ChatMessage] = []
+    /// Optional local JSONL log of every turn (question, tool calls, tool results, answer) for diagnosis.
+    private var logURL: URL?
+    public func setLogURL(_ url: URL?) { logURL = url }
+
+    private func log(_ question: String, trace: [String], outputs: [String], answer: String, unverified: [String]) {
+        guard let logURL else { return }
+        let entry: [String: Any] = ["ts": ISO8601DateFormatter().string(from: Date()), "question": question, "tools": trace,
+                                    "tool_results": outputs.map { String($0.prefix(2000)) }, "answer": answer, "unverified": unverified]
+        guard var line = try? JSONSerialization.data(withJSONObject: entry, options: [.sortedKeys, .withoutEscapingSlashes]) else { return }
+        line.append(0x0A)
+        try? FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let h = try? FileHandle(forWritingTo: logURL) { h.seekToEndOfFile(); h.write(line); try? h.close() }
+        else { try? line.write(to: logURL) }
+    }
 
     public init(llm: LLM, store: ExpenseStore, search: SearchService, categoryKeys: [String], today: Day = .today, maxRounds: Int = 6) {
         self.llm = llm
@@ -44,9 +58,10 @@ public actor Assistant {
         3. To see/plot/graph, call show_chart; the chart appears in the app. To change data, call the write tool; the app shows a Confirm card, so say it is waiting for confirmation, never that it is done.
         4. For questions about what was bought or which invoice, call search_invoices and cite invoices as [#id]. If nothing is found, say so; do not guess.
         5. If a request is ambiguous (e.g. which expense to delete), list candidates with list_expenses and ask.
-        6. For an invoice's items, quantities or prices, call get_invoice. Only state invoice fields that a tool returned; if a field is unknown (e.g. no date on the receipt), say it is missing. Never fill it in from what the user said.
-        7. To compare two periods, call compare_periods (it computes the difference); never subtract numbers yourself.
-        8. Reply briefly, in the language the [reply in …] tag on the user's message names.
+        6. Never convert currencies yourself; use usd_total_counted or query_expenses. If a tool returns an error (e.g. no vendor matches), fix the arguments and call it again; an error is not "no spending".
+        7. For an invoice's items, quantities or prices, call get_invoice. Only state invoice fields that a tool returned; if a field is unknown (e.g. no date on the receipt), say it is missing. Never fill it in from what the user said.
+        8. To compare two periods, call compare_periods (it computes the difference); never subtract numbers yourself.
+        9. Reply briefly, in the language the [reply in …] tag on the user's message names.
         """
     }
 
@@ -84,6 +99,7 @@ public actor Assistant {
                         + pending.map(\.summary).joined(separator: "; ")
                 }
                 let unverified = Self.unverifiedAmounts(in: text, sources: toolOutputs)
+                log(userText, trace: trace, outputs: toolOutputs, answer: text, unverified: unverified)
                 return Turn(text: text, effects: Self.filterCitations(effects, text: text), toolTrace: trace, unverifiedNumbers: unverified)
             }
             history.append(ChatMessage(role: "assistant", content: reply.content, toolCalls: reply.toolCalls))
@@ -104,6 +120,13 @@ public actor Assistant {
         let msg = try await executor.commit(p)
         history.append(.user("[app] The user confirmed: \(p.summary). Result: \(msg)"))
         return msg
+    }
+
+    /// Something changed outside the chat (confirm/reject/edit/import in the UI). Tell the
+    /// model so it doesn't answer from stale tool results earlier in the conversation.
+    public func noteAppEvent(_ text: String) {
+        guard !history.isEmpty else { return }
+        history.append(.user("[app event] \(text) Any earlier tool results about this are now out of date; call the tools again."))
     }
 
     public func decline(_ p: PendingAction) {

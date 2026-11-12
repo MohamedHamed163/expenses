@@ -140,15 +140,59 @@ public struct ToolExecutor: Sendable {
         }
     }
 
-    func filter(_ a: Args) throws -> ExpenseFilter {
-        var f = ExpenseFilter(categoryKey: a.str("category"), vendor: a.str("vendor"))
+    /// Words people (and models) use for a category, mapped to the stored key.
+    static let categorySynonyms: [String: String] = [
+        "coffee": "food", "cafe": "food", "restaurant": "food", "restaurants": "food", "dining": "food", "drinks": "food", "meal": "food",
+        "مطاعم": "food", "مطعم": "food", "قهوة": "food", "اكل": "food", "أكل": "food",
+        "supermarket": "groceries", "grocery": "groceries", "سوبرماركت": "groceries", "بقالة": "groceries",
+        "taxi": "transport", "uber": "transport", "fuel": "transport", "gas": "transport", "مواصلات": "transport", "تاكسي": "transport",
+        "flight": "travel", "hotel": "travel", "سفر": "travel", "subscription": "software", "subscriptions": "software",
+        "pharmacy": "health", "medicine": "health", "doctor": "health", "صيدلية": "health", "دواء": "health",
+        "electricity": "utilities", "internet": "utilities", "phone": "utilities", "كهرباء": "utilities",
+        "movies": "entertainment", "cinema": "entertainment", "سينما": "entertainment",
+    ]
+
+    /// Accepts a key ("food"), an English or Arabic display name ("Food & dining", "طعام ومطاعم") or a common word ("coffee").
+    /// Unknown categories are an error the model can correct, never a silent "other".
+    func resolveCategory(_ raw: String?) async throws -> String? {
+        guard let raw, !raw.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        let cats = try await store.categories()
+        let q = raw.lowercased().trimmingCharacters(in: .whitespaces)
+        if let c = cats.first(where: { $0.key == q || $0.nameEN.lowercased() == q || $0.nameAR == raw.trimmingCharacters(in: .whitespaces) }) { return c.key }
+        if let k = Self.categorySynonyms[q] { return k }
+        if let c = cats.first(where: { $0.nameEN.lowercased().contains(q) || q.contains($0.key) }) { return c.key }
+        throw ExpensesError.invalid("unknown category '\(raw)'. Use one of: \(cats.map(\.key).joined(separator: ", ")); or omit category")
+    }
+
+    /// "today", "yesterday", "this month", "last month", "this year", "last year" (and Arabic) besides YYYY[-MM[-DD]].
+    static func range(_ raw: String, today: Day) -> ClosedRange<Day>? {
+        switch raw.lowercased().trimmingCharacters(in: .whitespaces) {
+        case "today", "اليوم", "النهارده", "النهاردة": return today...today
+        case "yesterday", "امبارح", "أمس", "امس": let y = today.adding(days: -1); return y...y
+        case "this month", "الشهر ده", "هذا الشهر": return today.startOfMonth...today
+        case "last month", "الشهر اللي فات", "الشهر الماضي": let m = today.startOfMonth.adding(months: -1); return m...m.endOfMonth
+        case "this year", "السنة دي", "هذه السنة": return today.startOfYear...today
+        case "last year", "السنة اللي فاتت", "السنة الماضية": let y = today.startOfYear.adding(months: -12); return y...y.endOfYear
+        default: return Day.range(loose: raw)
+        }
+    }
+
+    func filter(_ a: Args) async throws -> ExpenseFilter {
+        var f = ExpenseFilter(categoryKey: try await resolveCategory(a.str("category")), vendor: a.str("vendor"))
         if let p = a.str("period") {
-            guard let r = Day.range(loose: p) else { throw ExpensesError.invalid("period '\(p)' must be YYYY, YYYY-MM or YYYY-MM-DD") }
+            guard let r = Self.range(p, today: today) else { throw ExpensesError.invalid("period '\(p)' must be YYYY, YYYY-MM, YYYY-MM-DD, today, yesterday, this/last month or this/last year") }
             f.from = r.lowerBound; f.to = r.upperBound
         }
-        if let s = a.str("from") { guard let r = Day.range(loose: s) else { throw ExpensesError.invalid("bad from date '\(s)'") }; f.from = r.lowerBound }
-        if let s = a.str("to") { guard let r = Day.range(loose: s) else { throw ExpensesError.invalid("bad to date '\(s)'") }; f.to = r.upperBound }
+        if let s = a.str("from") { guard let r = Self.range(s, today: today) else { throw ExpensesError.invalid("bad from date '\(s)'") }; f.from = r.lowerBound }
+        if let s = a.str("to") { guard let r = Self.range(s, today: today) else { throw ExpensesError.invalid("bad to date '\(s)'") }; f.to = r.upperBound }
         if let from = f.from, let to = f.to, from > to { throw ExpensesError.invalid("from is after to") }
+        if let v = f.vendor {
+            let matches = try await store.matchingVendors(v)
+            if matches.isEmpty {
+                let known = try await store.vendorNames(limit: 25)
+                throw ExpensesError.invalid("no vendor matches '\(v)' (this is NOT the same as spending $0). Known vendors: \(known.joined(separator: ", ")). Retry with the closest vendor name, or without a vendor filter")
+            }
+        }
         return f
     }
 
@@ -168,7 +212,7 @@ public struct ToolExecutor: Sendable {
         do {
             switch call.name {
             case "query_expenses", "show_chart":
-                let f = try filter(a)
+                let f = try await filter(a)
                 let g = GroupBy(rawValue: a.str("group_by") ?? "none") ?? .none
                 let rows = try await store.aggregate(f, groupBy: g, fillGaps: call.name == "show_chart")
                 let total = rows.reduce(Int64(0)) { $0 + $1.usdMinor }
@@ -180,6 +224,7 @@ public struct ToolExecutor: Sendable {
                     "rows": shown.prefix(40).map { ["label": $0.label, "total": Money.format($0.usdMinor), "count": $0.count] },
                 ]
                 if shown.count > 40 { payload["note"] = "showing first 40 of \(shown.count) rows" }
+                if let v = f.vendor { payload["matched_vendors"] = try await store.matchingVendors(v).map(\.name) }
                 var effects: [Effect] = []
                 if call.name == "show_chart" {
                     let kind = ChartKind(rawValue: a.str("chart_type") ?? "") ?? (g == .category || g == .vendor ? .pie : .bar)
@@ -193,10 +238,10 @@ public struct ToolExecutor: Sendable {
                 return Result(forModel: Self.json(payload), effects: effects)
 
             case "compare_periods":
-                guard let pa = a.str("period_a"), let ra = Day.range(loose: pa), let pb = a.str("period_b"), let rb = Day.range(loose: pb) else {
+                guard let pa = a.str("period_a"), let ra = Self.range(pa, today: today), let pb = a.str("period_b"), let rb = Self.range(pb, today: today) else {
                     throw ExpensesError.invalid("period_a and period_b must be YYYY, YYYY-MM or YYYY-MM-DD")
                 }
-                let cat = a.str("category")
+                let cat = try await resolveCategory(a.str("category"))
                 let ta = try await store.aggregate(ExpenseFilter(from: ra.lowerBound, to: ra.upperBound, categoryKey: cat), groupBy: .none)[0]
                 let tb = try await store.aggregate(ExpenseFilter(from: rb.lowerBound, to: rb.upperBound, categoryKey: cat), groupBy: .none)[0]
                 let diff = ta.usdMinor - tb.usdMinor
@@ -212,7 +257,7 @@ public struct ToolExecutor: Sendable {
                 return Result(forModel: Self.json(payload), effects: [.table(title: "\(pa) vs \(pb)", rows: rows)])
 
             case "list_expenses":
-                let f = try filter(a)
+                let f = try await filter(a)
                 let limit = Int(min(max(a.int("limit") ?? 20, 1), 50))
                 let page = try await store.listExpenses(f, limit: limit)
                 let rows = page.rows.map { e -> [String: Any] in
@@ -237,6 +282,7 @@ public struct ToolExecutor: Sendable {
                         if let v = inv.vendor { o["vendor"] = v }
                         o["date"] = inv.day?.iso ?? "not on the invoice (unknown)"
                         if let t = inv.totalMinor, let c = inv.currency { o["total"] = Money.format(t, currency: c) }
+                        if let usd = try? await store.usdForInvoice(h.invoiceID) { o["usd_total_counted"] = Money.format(usd) }
                     }
                     results.append(o)
                 }
@@ -266,6 +312,8 @@ public struct ToolExecutor: Sendable {
                     "instruction": "Report fields exactly as given. If a field says unknown, say it is missing; never fill it from the conversation.",
                 ]
                 if !inv.reviewReasons.isEmpty, inv.status != .confirmed { payload["review_reasons"] = inv.reviewReasons }
+                if let usd = try await store.usdForInvoice(id) { payload["usd_total_counted"] = Money.format(usd) }
+                else { payload["usd_total_counted"] = "not counted (invoice not confirmed)" }
                 return Result(forModel: Self.json(payload), effects: [.citations([id])])
 
             case "open_invoice":
@@ -290,19 +338,19 @@ public struct ToolExecutor: Sendable {
         }
     }
 
-    func newExpense(_ a: Args) throws -> NewExpense {
+    func newExpense(_ a: Args) async throws -> NewExpense {
         guard let ds = a.str("date"), let day = Day(parsing: ds) else { throw ExpensesError.invalid("date must be YYYY-MM-DD") }
         guard day <= today else { throw ExpensesError.invalid("date is in the future") }
         guard let amount = a.decimal("amount"), amount > 0 else { throw ExpensesError.invalid("amount must be a positive number") }
         let currency = Money.normalizeCurrency(a.str("currency") ?? "USD") ?? "USD"
         return NewExpense(day: day, amountMinor: Money.toMinor(amount, currency: currency), currency: currency,
-                          categoryKey: a.str("category") ?? "other", vendor: a.str("vendor"), note: a.str("note"))
+                          categoryKey: try await resolveCategory(a.str("category")) ?? "other", vendor: a.str("vendor"), note: a.str("note"))
     }
 
     func validateWrite(_ name: String, _ a: Args) async throws -> String {
         switch name {
         case "add_expense":
-            let e = try newExpense(a)
+            let e = try await newExpense(a)
             _ = try await store.rateE6(currency: e.currency, on: e.day)
             return "Add \(Money.format(e.amountMinor, currency: e.currency)) for \(e.categoryKey)\(e.vendor.map { " at \($0)" } ?? "") on \(e.day.iso)"
         case "edit_expense":
@@ -365,7 +413,7 @@ public struct ToolExecutor: Sendable {
         _ = try await validateWrite(p.toolName, a)   // re-validate: data may have changed since the card was shown
         switch p.toolName {
         case "add_expense":
-            let id = try await store.addExpense(try newExpense(a), actor: "ai")
+            let id = try await store.addExpense(try await newExpense(a), actor: "ai")
             return "Added expense #\(id)."
         case "edit_expense":
             let id = a.int("expense_id")!

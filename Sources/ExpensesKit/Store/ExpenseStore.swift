@@ -52,6 +52,46 @@ public final class ExpenseStore: Sendable {
             """, [.text(trimmed), .text(norm)])
     }
 
+    /// Generic words that don't identify a vendor on their own.
+    static let vendorStopwords: Set<String> = ["the", "inc", "co", "company", "ltd", "llc", "store", "shop", "market", "cafe", "coffee",
+                                               "restaurant", "egypt", "cairo", "and", "of", "for", "مطعم", "شركة", "محل"]
+
+    /// Tolerant vendor match: containment either way ("Starbucks Coffee" ~ "Starbucks"),
+    /// or a shared distinctive word of 4+ letters ("Maadi" ~ "Maadi Fresh Market").
+    public static func vendorMatches(query: String, vendorNorm: String) -> Bool {
+        let q = normalizeVendor(query)
+        guard !q.isEmpty, !vendorNorm.isEmpty else { return false }
+        if vendorNorm.contains(q) || q.contains(vendorNorm) { return true }
+        let qt = Set(q.split(separator: " ").map(String.init).filter { $0.count >= 4 && !vendorStopwords.contains($0) })
+        let vt = Set(vendorNorm.split(separator: " ").map(String.init))
+        return !qt.isDisjoint(with: vt)
+    }
+
+    func matchingVendors(_ c: PGConn, _ query: String) async throws -> [(id: Int64, name: String)] {
+        try await c.query("SELECT id, name, norm_name FROM vendors").compactMap { r in
+            Self.vendorMatches(query: query, vendorNorm: r.text("norm_name") ?? "") ? (r.int("id")!, r.text("name") ?? "") : nil
+        }
+    }
+
+    public func matchingVendors(_ query: String) async throws -> [(id: Int64, name: String)] {
+        try await db.read { try await self.matchingVendors($0, query) }
+    }
+
+    /// Vendor names that have expenses, most-spent first (for "did you mean" hints).
+    public func vendorNames(limit: Int = 25) async throws -> [String] {
+        try await db.read { c in
+            try await c.query("""
+                SELECT v.name FROM vendors v JOIN expenses e ON e.vendor_id = v.id AND e.deleted_at IS NULL
+                GROUP BY v.id, v.name ORDER BY sum(e.usd_minor) DESC LIMIT ?
+                """, [.int(Int64(limit))]).compactMap { $0.text("name") }
+        }
+    }
+
+    /// USD amount of the live expense(s) created from an invoice, if confirmed.
+    public func usdForInvoice(_ invoiceID: Int64) async throws -> Int64? {
+        try await db.read { try await $0.scalar("SELECT sum(usd_minor)::bigint FROM expenses WHERE invoice_id = ? AND deleted_at IS NULL", [.int(invoiceID)]) }
+    }
+
     static func opt(_ v: Int64?) -> PGValue { v.map { .int($0) } ?? .null }
     static func opt(_ v: String?) -> PGValue { v.map { .text($0) } ?? .null }
 
@@ -389,10 +429,17 @@ public final class ExpenseStore: Sendable {
         var params: [PGValue] = []
         if let from = f.from { clauses.append("e.day >= ?"); params.append(.int(Int64(from.value))) }
         if let to = f.to { clauses.append("e.day <= ?"); params.append(.int(Int64(to.value))) }
-        if let k = f.categoryKey { clauses.append("e.category_id = ?"); params.append(.int(try await categoryID(c, k))) }
+        if let k = f.categoryKey {
+            // Strict: an unknown category must never silently become "other" and report $0.
+            guard let id = try await c.scalar("SELECT id FROM categories WHERE key = ?", [.text(k.lowercased())]) else {
+                throw ExpensesError.invalid("unknown category '\(k)'")
+            }
+            clauses.append("e.category_id = ?"); params.append(.int(id))
+        }
         if let v = f.vendor, !v.isEmpty {
-            clauses.append("e.vendor_id IN (SELECT id FROM vendors WHERE norm_name LIKE ?)")
-            params.append(.text("%\(Self.normalizeVendor(v))%"))
+            let ids = try await matchingVendors(c, v).map(\.id)
+            // No matching vendor is "no such vendor", not "$0 spent": callers check matchingVendors first.
+            clauses.append(ids.isEmpty ? "FALSE" : "e.vendor_id IN (\(ids.map(String.init).joined(separator: ",")))")
         }
         return (clauses.joined(separator: " AND "), params)
     }

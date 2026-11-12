@@ -39,6 +39,19 @@ enum CLI {
                 // Multi-turn: separate turns with " || " to test follow-up questions.
                 let turns = args.dropFirst().joined(separator: " ").components(separatedBy: " || ")
                 for q in turns.dropLast() {
+                    // "!confirm <id> <YYYY-MM-DD>" simulates the user confirming in the review screen mid-conversation.
+                    if q.hasPrefix("!confirm") {
+                        let parts = q.split(separator: " ")
+                        let id = Int64(parts[1])!, day = Day(parsing: String(parts[2]))!
+                        let inv = try await store.invoice(id)
+                        try await store.confirmInvoice(id, corrected: ExtractedInvoice(vendor: inv.vendor, day: day, currency: inv.currency,
+                                                       totalMinor: inv.totalMinor, categoryKey: inv.categoryKey, lineItems: inv.lineItems, confidence: inv.confidence ?? 0))
+                        if ProcessInfo.processInfo.environment["NOTE_EVENTS"] == "1" {
+                            await assistant.noteAppEvent("Invoice #\(id) was confirmed in the review screen with date \(day.iso).")
+                        }
+                        print("[app] confirmed #\(id) on \(day.iso)\n")
+                        continue
+                    }
                     let t = try await assistant.ask(q)
                     print("Q: \(q)\n  tools: \(t.toolTrace)\n  answer: \(t.text)\n")
                 }
@@ -61,6 +74,11 @@ enum CLI {
                     let r = try await VoiceInput.transcribeFile(path)
                     print("\((path as NSString).lastPathComponent) [\(r.language), \(String(format: "%.1f", r.seconds))s]: \(r.text)")
                 }
+            case "--tool":
+                // Run one tool call directly: --tool query_expenses '{"vendor":"Starbucks"}'
+                let ex = ToolExecutor(store: store, search: SearchService(store: store, llm: llm))
+                let r = await ex.run(ToolCall(name: args[1], argumentsJSON: args.count > 2 ? args[2] : "{}"))
+                print(r.forModel)
             case "--reread":
                 let ingest = IngestService(store: store, llm: llm, filesDir: ExpenseStore.defaultURL().appendingPathComponent("files"))
                 for raw in args.dropFirst() {

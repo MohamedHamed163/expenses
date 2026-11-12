@@ -402,3 +402,89 @@ struct MissingLineTests {
         #expect(InvoiceExtractor.recoverMissingLine(items, ocrText: ocr, currency: "EGP", subtotal: nil, tax: nil, total: 71999) == items)
     }
 }
+
+@Suite("Filter matched nothing ≠ spent nothing")
+struct FilterRegressionTests {
+    let today = Day(parsing: "2026-11-12")!
+
+    func seeded() async throws -> (ExpenseStore, ToolExecutor) {
+        let (store, _) = try await makeStore()
+        try await store.addExpense(NewExpense(day: d("2026-11-12"), amountMinor: 73999, currency: "EGP", categoryKey: "food", vendor: "Starbucks"))
+        try await store.addExpense(NewExpense(day: d("2026-11-11"), amountMinor: 1200, currency: "USD", categoryKey: "transport", vendor: "Swvl"))
+        return (store, ToolExecutor(store: store, search: SearchService(store: store, llm: nil), today: today))
+    }
+
+    func total(_ ex: ToolExecutor, _ args: String) async -> String {
+        await ex.run(ToolCall(name: "query_expenses", argumentsJSON: args)).forModel
+    }
+
+    @Test func categoryDisplayNamesArabicNamesAndSynonymsResolve() async throws {
+        let (store, ex) = try await seeded()
+        for cat in ["food", "Food & dining", "FOOD & DINING", "طعام ومطاعم", "coffee", "restaurant", "Food"] {
+            let r = await total(ex, #"{"period":"2026-11-12","category":"\#(cat)"}"#)
+            #expect(r.contains("\"grand_total\":\"$15.17\""), "category \(cat): \(r)")
+        }
+        try await store.dropSchema()
+    }
+
+    @Test func unknownCategoryIsAnErrorNotZero() async throws {
+        let (store, ex) = try await seeded()
+        let r = await total(ex, #"{"period":"2026-11-12","category":"crypto"}"#)
+        #expect(r.contains("unknown category 'crypto'") && !r.contains("$0.00"))
+        try await store.dropSchema()
+    }
+
+    @Test func vendorMatchingIsTolerant() async throws {
+        let (store, ex) = try await seeded()
+        for v in ["Starbucks", "starbucks", "Starbucks Coffee", "STARBUCKS CAIRO", "the starbucks"] {
+            let r = await total(ex, #"{"period":"today","vendor":"\#(v)"}"#)
+            #expect(r.contains("\"grand_total\":\"$15.17\""), "vendor \(v): \(r)")
+            #expect(r.contains("\"matched_vendors\":[\"Starbucks\"]"))
+        }
+        #expect(!ExpenseStore.vendorMatches(query: "Coffee Shop", vendorNorm: "starbucks"))   // generic words alone don't match
+        try await store.dropSchema()
+    }
+
+    @Test func unknownVendorIsAnErrorWithSuggestionsNotZero() async throws {
+        let (store, ex) = try await seeded()
+        let r = await total(ex, #"{"period":"2026-11-12","vendor":"ستاربكس"}"#)
+        #expect(r.contains("no vendor matches") && r.contains("NOT the same as spending $0") && r.contains("Starbucks"))
+        #expect(!r.contains("grand_total"))
+        try await store.dropSchema()
+    }
+
+    @Test func relativePeriodsResolve() async throws {
+        let (store, ex) = try await seeded()
+        #expect(await total(ex, #"{"period":"today"}"#).contains("\"grand_total\":\"$15.17\""))
+        #expect(await total(ex, #"{"period":"yesterday"}"#).contains("\"grand_total\":\"$12.00\""))
+        #expect(await total(ex, #"{"period":"this month"}"#).contains("\"grand_total\":\"$27.17\""))
+        #expect(await total(ex, #"{"period":"اليوم"}"#).contains("\"grand_total\":\"$15.17\""))
+        #expect(ToolExecutor.range("last month", today: today) == d("2026-10-01")...d("2026-10-31"))
+        try await store.dropSchema()
+    }
+
+    @Test func confirmedInvoicesReportTheirCountedUSD() async throws {
+        let (store, dir) = try await makeStore()
+        let id = try await store.insertPendingInvoice(sha256: "u", filePath: dir.path + "/u.jpeg", originalName: "u.jpeg")
+        try await store.applyExtraction(invoiceID: id, extracted: ExtractedInvoice(vendor: "Starbucks", day: d("2026-11-12"), currency: "EGP", totalMinor: 73999, categoryKey: "food", confidence: 0.95),
+                                        ocrText: "", rawJSON: "{}", reasons: ["x"], duplicateOf: nil, autoConfirm: false)
+        let ex = ToolExecutor(store: store, search: SearchService(store: store, llm: nil), today: today)
+        #expect(await ex.run(ToolCall(name: "get_invoice", argumentsJSON: "{\"invoice_id\":\(id)}")).forModel.contains("not counted (invoice not confirmed)"))
+        try await store.confirmInvoice(id)
+        #expect(await ex.run(ToolCall(name: "get_invoice", argumentsJSON: "{\"invoice_id\":\(id)}")).forModel.contains("\"usd_total_counted\":\"$15.17\""))
+        try await store.dropSchema()
+    }
+
+    @Test func appEventsReachTheModel() async throws {
+        let (store, _) = try await makeStore()
+        let llm = FakeLLM { msgs, i in
+            if i == 1 { #expect(msgs.contains { $0.content.contains("[app event] The user confirmed invoice #11") }) }
+            return reply("ok")
+        }
+        let a = Assistant(llm: llm, store: store, search: SearchService(store: store, llm: nil), categoryKeys: ["food"], today: today)
+        _ = try await a.ask("recap invoice 11")
+        await a.noteAppEvent("The user confirmed invoice #11 in the review screen.")
+        _ = try await a.ask("starbucks today?")
+        try await store.dropSchema()
+    }
+}

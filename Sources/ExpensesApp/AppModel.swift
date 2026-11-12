@@ -86,6 +86,7 @@ final class AppModel {
         search = SearchService(store: store, llm: llm)
         categories = (try? await store.categories()) ?? []
         assistant = Assistant(llm: llm, store: store, search: search, categoryKeys: categories.map(\.key))
+        await assistant.setLogURL(ExpenseStore.defaultURL().appendingPathComponent("logs/wallet-turns.jsonl"))
         ready = true
         await refreshAll()
         await applyLaunchHooks()
@@ -158,6 +159,7 @@ final class AppModel {
             importing.append(url.lastPathComponent)
             let outcome = await ingest.ingest(url)
             importing.removeAll { $0 == url.lastPathComponent }
+            await assistant?.noteAppEvent("A new invoice was imported (\(url.lastPathComponent)): \(outcome).")
             switch outcome {
             case .confirmed(let id): flash("✓ Invoice #\(id) added")
             case .needsReview(let id, _): flash("Invoice #\(id) needs review"); selectedInvoiceID = id
@@ -177,18 +179,29 @@ final class AppModel {
     }
 
     func confirm(_ id: Int64, corrected: ExtractedInvoice?) async {
-        do { try await store.confirmInvoice(id, corrected: corrected); flash("Invoice #\(id) confirmed") }
+        do {
+            try await store.confirmInvoice(id, corrected: corrected)
+            flash("Invoice #\(id) confirmed")
+            await assistant?.noteAppEvent("The user confirmed invoice #\(id) in the review screen\(corrected?.day.map { " with date \($0.iso)" } ?? ""); it now counts in totals.")
+        }
         catch { flash("\(error)") }
         await refreshAll()
     }
 
     func reject(_ id: Int64) async {
-        do { try await store.rejectInvoice(id); flash("Invoice #\(id) rejected") } catch { flash("\(error)") }
+        do {
+            try await store.rejectInvoice(id); flash("Invoice #\(id) rejected")
+            await assistant?.noteAppEvent("The user rejected invoice #\(id); it no longer counts in totals.")
+        } catch { flash("\(error)") }
         await refreshAll()
     }
 
     func undo() async {
-        do { flash(try await store.undoLast()) } catch { flash("\(error)") }
+        do {
+            let msg = try await store.undoLast()
+            flash(msg)
+            await assistant?.noteAppEvent("The user pressed Undo: \(msg).")
+        } catch { flash("\(error)") }
         await refreshAll()
     }
 
