@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Expenses: build report</title>
+<style>
+  @page { size: A4; margin: 16mm 15mm; }
+  :root { --ink:#1b1f24; --muted:#5b6470; --line:#dfe3e8; --accent:#2f6fe4; --ok:#1d8a4e; --warn:#b26a00; --bg:#f6f8fa; }
+  * { box-sizing: border-box; }
+  body { font: 10.5pt/1.5 -apple-system, "Helvetica Neue", "Geeza Pro", Arial, sans-serif; color: var(--ink); margin: 0; }
+  h1 { font-size: 26pt; margin: 0 0 4px; letter-spacing: -0.5px; }
+  h2 { font-size: 15pt; margin: 26px 0 8px; padding-bottom: 4px; border-bottom: 2px solid var(--ink); break-after: avoid; }
+  h3 { font-size: 11.5pt; margin: 16px 0 6px; break-after: avoid; }
+  p { margin: 6px 0; }
+  .muted { color: var(--muted); }
+  .cover { padding: 30px 0 10px; border-bottom: 1px solid var(--line); margin-bottom: 10px; }
+  .tag { display:inline-block; font-size:8.5pt; padding:2px 8px; border-radius:10px; background:var(--bg); border:1px solid var(--line); margin:2px 4px 2px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 10px; font-size: 9.5pt; }
+  tr { break-inside: avoid; } thead, tr:first-child { break-after: avoid; }
+  th, td { text-align: left; padding: 5px 7px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--bg); font-weight: 600; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  code { font: 9pt "SF Mono", Menlo, monospace; background: var(--bg); padding: 1px 4px; border-radius: 3px; }
+  pre { font: 8.5pt/1.45 "SF Mono", Menlo, monospace; background: var(--bg); border: 1px solid var(--line); padding: 9px 11px; border-radius: 6px; white-space: pre-wrap; break-inside: avoid; }
+  .ok { color: var(--ok); font-weight: 600; } .warn { color: var(--warn); font-weight: 600; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  figure { margin: 10px 0; break-inside: avoid; }
+  figure img { width: 100%; border: 1px solid var(--line); border-radius: 6px; }
+  figcaption { font-size: 8.5pt; color: var(--muted); margin-top: 3px; }
+  .callout { border-left: 3px solid var(--accent); background: var(--bg); padding: 8px 12px; margin: 10px 0; break-inside: avoid; }
+  .page-break { break-before: page; }
+  ul { margin: 4px 0 8px 18px; padding: 0; } li { margin: 2px 0; }
+  svg text { font-family: -apple-system, "Helvetica Neue", Arial; }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <h1>Expenses</h1>
+  <p style="font-size:13pt;margin:0">A private macOS expense tracker with invoice RAG, charts and full control by chat and voice</p>
+  <p class="muted">Build report: what was built, how it works, what was tested, and which frameworks were used · 12 November 2026</p>
+  <span class="tag">Swift 6 · SwiftUI</span><span class="tag">Postgres 17 + pgvector 0.8.7</span><span class="tag">Ollama · qwen3.5:9b</span><span class="tag">Apple Vision OCR</span><span class="tag">Apple Speech (on-device)</span><span class="tag">Swift Charts</span><span class="tag">41 tests passing + 1M-row benchmark</span>
+</div>
+
+<h2>1. Summary</h2>
+<p>Expenses is a native macOS app. You drop invoices in (PDF, scan or phone photo, in Arabic or English), a <b>local</b> AI model reads them, and every confirmed invoice becomes an expense in USD. The app has a dashboard, charts by day, month, year, category and vendor, and an <b>Ask AI</b> panel that answers questions and drives the whole app through tool calls. You can type or hold the mic to speak. All AI and all data stay on the Mac: Ollama for the models, Apple Vision for OCR, Apple Speech for voice, and a local Postgres 17 database with pgvector for both the data and the RAG index.</p>
+<div class="callout"><b>Core design rule: the model reads and talks, code decides the numbers.</b> Totals and charts come only from SQL. Money is integer minor units. Auto-confirmation is a deterministic validator. Any write the AI proposes waits for a Confirm click and can be undone. Any dollar amount in an AI answer that no tool produced is flagged on screen.</div>
+
+<table>
+  <tr><th>Requirement from the brief</th><th>How it is delivered</th></tr>
+  <tr><td>Mac app called Expenses</td><td>Native SwiftUI app, <code>build/Expenses.app</code>, macOS 15+</td></tr>
+  <tr><td>Upload invoices</td><td>Drag-and-drop or Import (PDF and images). Text PDFs are parsed with PDFKit; scans and photos go through Apple Vision OCR (Arabic + English) plus the vision model</td></tr>
+  <tr><td>Invoices added to RAG</td><td>Each invoice is chunked into Postgres: a <code>vector(1024)</code> embedding (HNSW index) plus a <code>tsvector</code> (GIN index) in the same row and transaction. Hybrid search merges both with Reciprocal Rank Fusion</td></tr>
+  <tr><td>Ask AI about expenses per month, day and so on</td><td>A tool-calling agent with 14 tools (<code>query_expenses</code>, <code>show_chart</code>, <code>compare_periods</code>, <code>search_invoices</code>…). Every figure comes from SQL</td></tr>
+  <tr><td>Graphs</td><td>Swift Charts (bar, line, donut), by day, month, year, category or vendor, with empty periods filled with zeros</td></tr>
+  <tr><td>Full control by chatting</td><td>The chat can navigate, open invoices, draw charts, add, edit, split and delete expenses, confirm invoices, set exchange rates and undo</td></tr>
+  <tr><td>Voice</td><td>Push-to-talk with on-device Apple Speech (Arabic or English). The transcript appears in the box before it is sent</td></tr>
+  <tr><td>Past-year graph</td><td>"Show me last year's expenses by month as a graph" → <code>show_chart(period: 2025, group_by: month)</code> → Analytics screen</td></tr>
+  <tr><td>PDF of what was done</td><td>This document</td></tr>
+</table>
+
+<h2>2. Decisions agreed before building</h2>
+<p>Each branch of the design was settled one question at a time before any code was written. These answers drive the schema and behavior.</p>
+<table>
+  <tr><th>Branch</th><th>Decision</th><th>Consequence in code</th></tr>
+  <tr><td>Languages and currencies</td><td>Arabic and English, multiple currencies</td><td>Amounts stored as integer minor units per ISO 4217 (KWD has 3 decimals, JPY 0). Arabic-Indic digits are normalized</td></tr>
+  <tr><td>Conversion</td><td>Freeze the rate per invoice; base currency <b>USD</b></td><td><code>fx_rate_e6</code> and <code>usd_minor</code> are stored on each expense. Changing a rate never changes past totals</td></tr>
+  <tr><td>Granularity</td><td>One expense per invoice, with optional split</td><td>Charts read one <code>expenses</code> table. Line items are kept for search and cross-checks. <code>split_expense</code> enforces an exact sum</td></tr>
+  <tr><td>Schema and scale</td><td>Covering indexes; add a rollup table only if a 1M-row query exceeds 50 ms</td><td>Benchmark below: not needed</td></tr>
+  <tr><td>Auto-confirm</td><td>Only if every check passes</td><td>Confidence ≥ 0.9, line items explain the total within ±1%, date within 10 years and not in the future, currency and rate known, not a likely duplicate</td></tr>
+  <tr><td>Duplicates</td><td>Block exact copies, flag likely ones</td><td>UNIQUE <code>file_sha256</code>. Same vendor, day and total from another file → "Needs review"</td></tr>
+  <tr><td>AI writes</td><td>Confirm card plus undo log</td><td>Write tools only produce a <code>PendingAction</code>. Each committed write is one transaction plus an <code>audit_log</code> row holding the inverse operation</td></tr>
+  <tr><td>Voice</td><td>Push-to-talk, on-device</td><td><code>requiresOnDeviceRecognition = true</code>. The transcript must be sent by the user</td></tr>
+  <tr><td>AI offline</td><td>Queue and retry, app stays usable</td><td>The upload is saved first as <code>pending</code>, retried 3 times with backoff, then marked <code>failed</code> with a Retry button. Pending work is processed on the next launch</td></tr>
+  <tr><td>Database (changed mid-build)</td><td><b>Postgres 17 + pgvector for all data</b></td><td>The first version used SQLite and passed all tests. On request it was moved entirely to Postgres so an invoice and its vectors commit atomically and vector search uses HNSW</td></tr>
+</table>
+
+<h2>3. Architecture</h2>
+<svg viewBox="0 0 760 330" width="100%" xmlns="http://www.w3.org/2000/svg" style="border:1px solid #dfe3e8;border-radius:6px;background:#fff">
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5b6470"/></marker></defs>
+  <g font-size="11">
+    <rect x="15" y="20" width="150" height="50" rx="8" fill="#eef4ff" stroke="#2f6fe4"/><text x="90" y="41" text-anchor="middle" font-weight="600">Invoice file</text><text x="90" y="58" text-anchor="middle" fill="#5b6470">PDF · photo · scan</text>
+    <rect x="200" y="20" width="160" height="50" rx="8" fill="#f6f8fa" stroke="#9aa4b0"/><text x="280" y="41" text-anchor="middle" font-weight="600">TextExtractor</text><text x="280" y="58" text-anchor="middle" fill="#5b6470">PDFKit · Vision OCR (ar+en)</text>
+    <rect x="395" y="20" width="165" height="50" rx="8" fill="#fff5e6" stroke="#b26a00"/><text x="477" y="41" text-anchor="middle" font-weight="600">InvoiceExtractor</text><text x="477" y="58" text-anchor="middle" fill="#5b6470">qwen3.5:9b → strict JSON</text>
+    <rect x="595" y="20" width="150" height="50" rx="8" fill="#eaf7ef" stroke="#1d8a4e"/><text x="670" y="41" text-anchor="middle" font-weight="600">Validator</text><text x="670" y="58" text-anchor="middle" fill="#5b6470">deterministic rules</text>
+    <line x1="165" y1="45" x2="198" y2="45" stroke="#5b6470" marker-end="url(#a)"/><line x1="360" y1="45" x2="393" y2="45" stroke="#5b6470" marker-end="url(#a)"/><line x1="560" y1="45" x2="593" y2="45" stroke="#5b6470" marker-end="url(#a)"/>
+    <rect x="200" y="125" width="360" height="85" rx="10" fill="#f0f4ff" stroke="#2f6fe4" stroke-width="1.5"/>
+    <text x="380" y="146" text-anchor="middle" font-weight="700">Postgres 17 + pgvector (one transaction per write)</text>
+    <text x="380" y="165" text-anchor="middle" fill="#333">invoices · line_items · expenses · fx_rates · vendors · audit_log</text>
+    <text x="380" y="183" text-anchor="middle" fill="#333">chunks: embedding vector(1024) [HNSW] + tsv tsvector [GIN]</text>
+    <text x="380" y="200" text-anchor="middle" fill="#5b6470">covering partial indexes · keyset pagination</text>
+    <path d="M670,70 L670,100 L470,100 L470,123" fill="none" stroke="#5b6470" marker-end="url(#a)"/><text x="600" y="95" fill="#5b6470">confirm or "Needs review"</text>
+    <rect x="15" y="250" width="160" height="58" rx="8" fill="#eef4ff" stroke="#2f6fe4"/><text x="95" y="272" text-anchor="middle" font-weight="600">Chat / Voice</text><text x="95" y="290" text-anchor="middle" fill="#5b6470">Apple Speech on-device</text>
+    <rect x="215" y="250" width="200" height="58" rx="8" fill="#fff5e6" stroke="#b26a00"/><text x="315" y="272" text-anchor="middle" font-weight="600">Assistant (tool loop ≤ 6)</text><text x="315" y="290" text-anchor="middle" fill="#5b6470">qwen3.5:9b · 14 tools</text>
+    <rect x="455" y="250" width="140" height="58" rx="8" fill="#eaf7ef" stroke="#1d8a4e"/><text x="525" y="272" text-anchor="middle" font-weight="600">ToolExecutor</text><text x="525" y="290" text-anchor="middle" fill="#5b6470">reads now · writes → card</text>
+    <rect x="625" y="250" width="120" height="58" rx="8" fill="#f6f8fa" stroke="#9aa4b0"/><text x="685" y="272" text-anchor="middle" font-weight="600">SwiftUI</text><text x="685" y="290" text-anchor="middle" fill="#5b6470">Swift Charts</text>
+    <line x1="175" y1="279" x2="213" y2="279" stroke="#5b6470" marker-end="url(#a)"/><line x1="415" y1="279" x2="453" y2="279" stroke="#5b6470" marker-end="url(#a)"/><line x1="595" y1="279" x2="623" y2="279" stroke="#5b6470" marker-end="url(#a)"/>
+    <line x1="525" y1="250" x2="470" y2="212" stroke="#5b6470" marker-end="url(#a)"/><text x="505" y="232" fill="#5b6470">SQL · hybrid search</text>
+    <line x1="560" y1="167" x2="740" y2="167" stroke="#9aa4b0" stroke-dasharray="3 3"/><text x="650" y="160" fill="#5b6470" text-anchor="middle">charts read SQL directly</text><line x1="740" y1="167" x2="740" y2="248" stroke="#9aa4b0" stroke-dasharray="3 3" marker-end="url(#a)"/>
+    <line x1="477" y1="70" x2="420" y2="123" stroke="#9aa4b0" stroke-dasharray="3 3" marker-end="url(#a)"/><text x="395" y="105" fill="#5b6470">embeddings (qwen3-embedding)</text>
+  </g>
+</svg>
+
+<h3>Code layout (4,300 lines of Swift)</h3>
+<table>
+  <tr><th>Module / file</th><th>Responsibility</th></tr>
+  <tr><td><code>ExpensesKit/DB/Postgres.swift</code></td><td>PostgresNIO connection pool. <code>read</code> leases a connection; <code>transaction</code> runs BEGIN/COMMIT on one leased connection and rolls back on any error</td></tr>
+  <tr><td><code>ExpensesKit/DB/Schema.swift</code></td><td>Versioned migrations under an advisory lock; pgvector HNSW and GIN indexes; seed categories (EN/AR) and default rates</td></tr>
+  <tr><td><code>ExpensesKit/Store/ExpenseStore.swift</code></td><td>All reads and writes: invoices, audited expense writes, undo, aggregates, keyset lists, RAG chunks, vector and full-text search</td></tr>
+  <tr><td><code>ExpensesKit/Core/Money.swift, Day.swift</code></td><td>Minor units, currency normalization (symbols and Arabic names), Arabic-Indic digits, <code>yyyymmdd</code> days</td></tr>
+  <tr><td><code>ExpensesKit/Ingest/*</code></td><td>TextExtractor (PDFKit/Vision), InvoiceExtractor (prompt and parsing), Validator, IngestService (retries, duplicates, indexing)</td></tr>
+  <tr><td><code>ExpensesKit/Search/SearchService.swift</code></td><td>Hybrid retrieval: tsvector + pgvector, RRF k = 60, best chunk per invoice</td></tr>
+  <tr><td><code>ExpensesKit/Assistant/*</code></td><td>Tool catalog, ToolExecutor (validate, then pend or run), Assistant loop and its safety guards</td></tr>
+  <tr><td><code>ExpensesApp/*</code></td><td>SwiftUI screens, chat panel, confirm cards, Swift Charts, push-to-talk speech, CLI mode</td></tr>
+</table>
+
+<h2 class="page-break">4. How each part works</h2>
+<h3>4.1 Invoice ingestion</h3>
+<ol>
+  <li><b>Save first.</b> The file is hashed (SHA-256), copied into app storage and inserted as <code>pending</code> using <code>INSERT … ON CONFLICT (file_sha256) DO NOTHING</code>. If 10 uploads of the same file arrive at once, exactly one wins (tested).</li>
+  <li><b>Read.</b> PDFs with a text layer use PDFKit. Scans and photos are OCR'd by Apple Vision with <code>recognitionLanguages = ["ar-SA","en-US"]</code>, and the page image is also sent to the vision-capable model.</li>
+  <li><b>Extract.</b> <code>qwen3.5:9b</code> runs at temperature 0 and must return one JSON object. The prompt says invoice text is data, not instructions, and asks for numbers to be copied, never computed. The reply is parsed deterministically: currency symbols and Arabic names map to ISO codes, Arabic-Indic digits and both decimal styles are handled, and unknown categories become "other".</li>
+  <li><b>Validate.</b> The agreed rules decide <code>autoConfirm</code>, and every failed rule becomes a readable reason shown to the user.</li>
+  <li><b>Commit.</b> One transaction writes the extracted fields, line items and status, and the expense if auto-confirmed, with its frozen rate and an audit row.</li>
+  <li><b>Index.</b> A summary chunk plus 700-character OCR chunks are embedded with <code>qwen3-embedding:0.6b</code> (1024 dimensions) and stored with their tsvector. If embedding fails, keyword search still works (tested).</li>
+  <li><b>Failure.</b> If the AI is unreachable or returns bad JSON, the invoice is retried 3 times with backoff and then marked <code>failed</code>. One bad invoice never affects another (tested).</li>
+</ol>
+
+<h3>4.2 Ask AI and full control</h3>
+<table>
+  <tr><th>Tool</th><th>Kind</th><th>Purpose</th></tr>
+  <tr><td>query_expenses</td><td>read</td><td>Exact totals, grouped by none, day, month, year, category or vendor</td></tr>
+  <tr><td>show_chart</td><td>read</td><td>Draws a chart in the app (bar, line or pie) and opens Analytics</td></tr>
+  <tr><td>compare_periods</td><td>read</td><td>Difference and % change computed in code</td></tr>
+  <tr><td>list_expenses · search_invoices · open_invoice · navigate</td><td>read</td><td>Lists with ids, hybrid RAG search with citations, opening an invoice, switching screens</td></tr>
+  <tr><td>add / edit / delete / split expense · confirm_invoice · set_exchange_rate · undo_last</td><td>write</td><td>Validated immediately, so bad arguments go back to the model. Executed only after Confirm, then re-validated, run in a transaction and audited</td></tr>
+</table>
+<h3>4.3 How hallucination is controlled</h3>
+<ul>
+  <li><b>Numbers come only from tools.</b> Tool results carry amounts already formatted by code (<code>"$643.50"</code>). Charts and tables render the tool's rows, not the model's text.</li>
+  <li><b>Unverified-number guard.</b> Every money amount in the final answer is checked against the numbers that appeared in tool outputs. Anything else is shown as "Not from your data". In the dry run this caught a subtraction the model did itself.</li>
+  <li><b>Dates and language are decided by code.</b> The prompt contains precomputed anchors (last month = 2026-10, and so on). The reply language comes from the script the user typed.</li>
+  <li><b>Writes cannot be claimed.</b> On a turn that proposes a write, the visible text is written by code ("Waiting for your confirmation: …").</li>
+  <li><b>RAG answers cite invoices</b> (<code>[#id]</code>, clickable). Only cited invoices are shown, and "not found" is the required answer when nothing matches.</li>
+  <li><b>A bounded loop.</b> The agent gets at most 6 tool rounds, and unknown tools are rejected.</li>
+</ul>
+
+<h3>4.4 Data model and database optimisation</h3>
+<pre>expenses(id, invoice_id?, day BIGINT yyyymmdd, category_id, vendor_id?, amount_minor, currency,
+         fx_rate_e6, usd_minor, note, created_at, deleted_at?)            -- soft delete for undo
+  expenses_day      (day)              INCLUDE (usd_minor) WHERE deleted_at IS NULL
+  expenses_cat_day  (category_id, day) INCLUDE (usd_minor) WHERE deleted_at IS NULL
+  expenses_vendor_day(vendor_id, day)  INCLUDE (usd_minor) WHERE deleted_at IS NULL
+  expenses_list     (day DESC, id DESC)                    WHERE deleted_at IS NULL   -- keyset pages
+invoices(id, file_sha256 UNIQUE, status CHECK(...), vendor_id, issue_day, currency, total_minor,
+         confidence, ocr_text, extraction_json JSONB, review_reasons JSONB, duplicate_of, attempts, last_error)
+chunks(id, invoice_id, text, embedding vector(1024) [HNSW cosine], tsv tsvector GENERATED [GIN, 'simple'])
+audit_log(id, action, actor user|ai|auto, summary, undo_json JSONB, undone)</pre>
+<ul>
+  <li><b>Read hot path</b> (charts): a range scan on a covering partial index. The query plan is <i>Index Only Scan using expenses_day</i>.</li>
+  <li><b>Write hot path</b> (ingest): one short transaction per invoice. Vendor upsert uses <code>ON CONFLICT</code>; confirm and undo lock rows with <code>FOR UPDATE</code>, so two confirms or two undos can't double-apply.</li>
+  <li><b>Pagination:</b> keyset <code>(day, id) &lt; (?, ?)</code>, so every page is an index seek no matter how deep.</li>
+</ul>
+
+<h2 class="page-break">5. Testing</h2>
+<p><b>41 automated tests pass</b> (Swift Testing). Each test runs in its own Postgres schema. A 42nd test, the 1M-row benchmark, is opt-in (<code>EXPENSES_BENCH=1</code>) and also passes.</p>
+<table>
+  <tr><th>Suite</th><th class="num">Tests</th><th>What it proves</th></tr>
+  <tr><td>Money · Day</td><td class="num">6</td><td>Amount formats (<code>1.234,50</code>, <code>١٬٢٣٤٫٥٠</code>), currency symbols, minor digits (KWD/JPY), frozen USD conversion, date parsing and ranges</td></tr>
+  <tr><td>Validator · Extraction parsing</td><td class="num">6</td><td>Each auto-confirm rule in isolation; the ±1% tolerance; Arabic invoice JSON; JSON wrapped in chatter</td></tr>
+  <tr><td>Store</td><td class="num">7</td><td>Idempotent migrations; aggregates with gap filling; keyset pages return every row exactly once; frozen rates; undo of add, edit, split and delete; <b>failed writes roll back completely</b>; 200 concurrent writers</td></tr>
+  <tr><td>Ingestion (fake model)</td><td class="num">6</td><td>Auto-confirm path; duplicate file and lookalike; <b>AI offline → 3 retries → failed → retry succeeds</b>; garbage JSON isolated to one invoice; embedding outage; confirm, reject and undo</td></tr>
+  <tr><td>Assistant (fake model)</td><td class="num">8</td><td>Totals from the DB; invented numbers flagged; exact chart data; writes wait for Confirm and can be undone; bad arguments return to the model; citations and "not found"; bounded loop; future dates and unknown tools rejected</td></tr>
+  <tr><td>Postgres specifics</td><td class="num">3</td><td>10 concurrent identical uploads → 1 invoice; HNSW vector search ranking; Arabic full-text search</td></tr>
+  <tr><td>Dry-run regressions</td><td class="num">5</td><td>Date anchors; reply language; code-written pending text; <code>compare_periods</code>; citation filtering</td></tr>
+</table>
+
+<h3>5.1 Scalability: 1,000,000 expenses</h3>
+<table>
+  <tr><th>Query (warm, release build)</th><th class="num">SQLite (v1)</th><th class="num">Postgres 17 (final)</th></tr>
+  <tr><td>Last year by month</td><td class="num">11.9 ms</td><td class="num ok">18.2 ms</td></tr>
+  <tr><td>Last year by day (365 points)</td><td class="num">5.6 ms</td><td class="num ok">20.2 ms</td></tr>
+  <tr><td>Last year by category</td><td class="num">5.5 ms</td><td class="num ok">17.5 ms</td></tr>
+  <tr><td>One month total</td><td class="num">1.0 ms</td><td class="num ok">3.2 ms</td></tr>
+  <tr><td>Food, last year by month</td><td class="num">1.5 ms</td><td class="num ok">4.5 ms</td></tr>
+  <tr><td><b>All time by year</b> (full scan)</td><td class="num warn">210.6 ms</td><td class="num ok">56.4 ms</td></tr>
+  <tr><td>100 list pages of 50 (keyset)</td><td class="num">66 ms</td><td class="num ok">72 ms</td></tr>
+</table>
+<p>Every bounded chart query is far under the agreed 50 ms threshold, so no rollup table was added. <b>What breaks first</b> is the unbounded "all time" aggregate, which grows linearly. The fix, if it is ever needed, is a <code>monthly_totals</code> rollup maintained in the same transaction as each write.</p>
+
+<h3>5.2 End-to-end dry run (live local model)</h3>
+<p>Eight generated invoices with fictional vendors went through the real pipeline (PDFKit/Vision → <code>qwen3.5:9b</code> → validator → Postgres + pgvector):</p>
+<table>
+  <tr><th>Invoice</th><th>Case</th><th>Extracted</th><th>Outcome</th><th class="num">Time</th></tr>
+  <tr><td>Maadi Fresh Market (PDF)</td><td>English, EGP, VAT</td><td>EGP 1,607.40 → $32.95</td><td class="ok">confirmed</td><td class="num">13.1 s</td></tr>
+  <tr><td>صيدليات النور</td><td>Arabic, Arabic-Indic digits</td><td>٤١٠٫٠٠ → EGP 410.00, 2026-10-22</td><td class="ok">confirmed</td><td class="num">8.8 s</td></tr>
+  <tr><td>Najd Grill · مشويات نجد</td><td>Mixed AR/EN, SAR, VAT 15%</td><td>SAR 184.00 → $49.07</td><td class="ok">confirmed</td><td class="num">10.1 s</td></tr>
+  <tr><td>Nimbus Cloud Inc.</td><td>USD subscription</td><td>$40.99</td><td class="ok">confirmed</td><td class="num">8.7 s</td></tr>
+  <tr><td>Zamalek Electronics</td><td>Items ≠ total</td><td>EGP 1,430 vs EGP 1,980</td><td class="warn">needs review</td><td class="num">9.1 s</td></tr>
+  <tr><td>Horizon Travel</td><td>Future date</td><td>2027-02-15</td><td class="warn">needs review</td><td class="num">6.2 s</td></tr>
+  <tr><td>Gulf Books Kuwait</td><td>KWD, 3 decimals</td><td>KWD 12.250 → $39.81</td><td class="ok">confirmed</td><td class="num">8.0 s</td></tr>
+  <tr><td>Maadi Fresh Market (PNG photo)</td><td>Same purchase, different file</td><td>Same values via Vision OCR</td><td class="warn">possible duplicate of #1</td><td class="num">10.4 s</td></tr>
+  <tr><td>Maadi Fresh Market (PDF again)</td><td>Same file</td><td>n/a</td><td>blocked: already #1</td><td class="num">0.0 s</td></tr>
+</table>
+<p>A second clean run produced identical outcomes, because extraction is deterministic at temperature 0. The live assistant was then asked 7 questions in English and Arabic. <b>The first run found 5 real defects</b> the fake-model tests could not: "last month" resolved to the wrong year, English questions were answered in Arabic, a pending write was described as done, the model subtracted numbers itself, and citations were over-inclusive. All five were fixed in code (§4.3) and covered by regression tests. On re-run, every figure matched SQL exactly: $643.50 for October, $151.14 for September groceries, and −$29.82 / −4.4% for October vs September.</p>
+
+<h2 class="page-break">6. Screenshots (running app, demo database)</h2>
+<div class="grid2">
+  <figure><img src="screenshots/dashboard.png"><figcaption>Dashboard: month, last month and year-to-date stats, 12-month chart, categories, recent expenses</figcaption></figure>
+  <figure><img src="screenshots/ai-chart.png"><figcaption>"Show me last year's expenses by month as a graph" → show_chart → Analytics</figcaption></figure>
+  <figure><img src="screenshots/ai-arabic-confirm.png"><figcaption>An Arabic question answered from SQL; "add 12 dollars taxi yesterday" → Confirm card</figcaption></figure>
+  <figure><img src="screenshots/ai-search-compare.png"><figcaption>RAG search cites #1 and #8; compare_periods computes the difference</figcaption></figure>
+  <figure><img src="screenshots/review-mismatch.png"><figcaption>Needs review: line items don't explain the total; editable fields; Confirm or Reject</figcaption></figure>
+  <figure><img src="screenshots/arabic-invoice.png"><figcaption>Arabic pharmacy invoice extracted and auto-confirmed</figcaption></figure>
+  <figure><img src="screenshots/duplicate-photo.png"><figcaption>A phone photo of an already-imported receipt is flagged as a possible duplicate</figcaption></figure>
+  <figure><img src="screenshots/settings.png"><figcaption>Settings: local AI and database, editable exchange rates, change history with the actor (user / AI / auto)</figcaption></figure>
+</div>
+
+<h2 class="page-break">7. Frameworks and tools used</h2>
+<table>
+  <tr><th>Area</th><th>Technology</th><th>Why</th></tr>
+  <tr><td>Language and UI</td><td>Swift 6.1, SwiftUI (Observation, NavigationSplitView, Inspector, Table)</td><td>Native, fast, one language for app and core</td></tr>
+  <tr><td>Charts</td><td>Swift Charts (BarMark, LineMark/AreaMark, SectorMark)</td><td>Native charts that render exact SQL rows</td></tr>
+  <tr><td>Database</td><td>PostgreSQL 17.11 (Homebrew)</td><td>Transactions, MVCC concurrency, covering partial indexes, JSONB</td></tr>
+  <tr><td>Vector search</td><td>pgvector 0.8.7, HNSW index, cosine distance</td><td>The RAG index lives in the same transaction as the invoice; approximate nearest-neighbour search scales to millions of vectors</td></tr>
+  <tr><td>Keyword search</td><td>Postgres full-text (generated <code>tsvector</code>, GIN, <code>'simple'</code> config)</td><td>Works for Arabic and English without stemming</td></tr>
+  <tr><td>DB driver</td><td>PostgresNIO 1.33 (vapor/postgres-nio) with a connection pool</td><td>Async Swift driver, typed binds, SQLSTATE errors</td></tr>
+  <tr><td>Local LLM runtime</td><td>Ollama 0.40.16</td><td>Private, offline, no API cost</td></tr>
+  <tr><td>Chat, tools, vision model</td><td><code>qwen3.5:9b</code> (tools + vision, thinking off, temperature 0)</td><td>One local model for extraction, photo reading and tool calling; handles Arabic</td></tr>
+  <tr><td>Embeddings</td><td><code>qwen3-embedding:0.6b</code> (1024 dimensions)</td><td>Multilingual and small</td></tr>
+  <tr><td>PDF and OCR</td><td>PDFKit, Apple Vision <code>VNRecognizeTextRequest</code> (ar-SA, en-US)</td><td>On-device, built into macOS</td></tr>
+  <tr><td>Voice</td><td>Apple Speech <code>SFSpeechRecognizer</code> (on-device only) + AVAudioEngine</td><td>Push-to-talk, audio never leaves the Mac</td></tr>
+  <tr><td>Hashing</td><td>CryptoKit SHA-256</td><td>Exact-duplicate detection</td></tr>
+  <tr><td>Tests</td><td>Swift Testing (<code>@Test</code>, <code>#expect</code>), a fake LLM, a schema per test</td><td>Deterministic tests of the AI paths, isolated from each other</td></tr>
+  <tr><td>Build</td><td>Swift Package Manager, <code>scripts/make_app.sh</code> (ad-hoc signed .app)</td><td>No Xcode project needed</td></tr>
+</table>
+
+<h2>8. How to run</h2>
+<pre>brew install postgresql@17 pgvector &amp;&amp; brew services start postgresql@17
+createdb expenses &amp;&amp; psql -d expenses -c "CREATE EXTENSION vector"
+ollama pull qwen3.5:9b &amp;&amp; ollama pull qwen3-embedding:0.6b
+scripts/make_app.sh &amp;&amp; open build/Expenses.app
+
+# tests (needs a database called expenses_test with the vector extension)
+createdb expenses_test &amp;&amp; psql -d expenses_test -c "CREATE EXTENSION vector"
+swift test                                   # 41 tests (+ opt-in benchmark)
+EXPENSES_BENCH=1 swift test -c release --filter Scale   # 1M-row benchmark
+
+# headless
+build/Expenses.app/Contents/MacOS/ExpensesApp --ingest samples/*.pdf
+build/Expenses.app/Contents/MacOS/ExpensesApp --ask "How much did I spend last month?"</pre>
+
+<h2>9. Open risks and deferred work</h2>
+<table>
+  <tr><th>Item</th><th>Status and plan</th></tr>
+  <tr><td>Exchange rates</td><td>Defaults are approximate and editable. There is no live rate feed, because the app is local-first. A dated-rate import could be added</td></tr>
+  <tr><td>"All time" aggregate</td><td>56 ms at 1M rows and linear in size; add a <code>monthly_totals</code> rollup if needed</td></tr>
+  <tr><td>Extraction accuracy at scale</td><td>Measured on 8 generated invoices, all correct. A labelled set of about 30 real invoices is needed to report field-level accuracy</td></tr>
+  <tr><td>Voice in Arabic</td><td>Requires the Arabic on-device dictation model to be installed; the app explains this if it is missing. Not exercised in automated tests, which need a microphone</td></tr>
+  <tr><td>Model speed</td><td>6–13 s per invoice and 6–17 s per chat answer on this Mac with a 9B model</td></tr>
+  <tr><td>Distribution</td><td>Ad-hoc signed and requires a local Postgres service. A notarized build with bundled Postgres setup is future work</td></tr>
+  <tr><td>Multi-page invoices</td><td>OCR reads up to 5 pages, and the vision model sees page 1</td></tr>
+</table>
+
+</body>
+</html>
