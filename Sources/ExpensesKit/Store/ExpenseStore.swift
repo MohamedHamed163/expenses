@@ -114,7 +114,8 @@ public final class ExpenseStore: Sendable {
 
     public func resetForRetry(invoiceID: Int64) async throws {
         try await db.read { c in
-            try await c.run("UPDATE invoices SET status = 'pending', attempts = 0, last_error = NULL WHERE id = ? AND status IN ('failed','pending')", [.int(invoiceID)])
+            // Proposed invoices can be re-read too (e.g. after a better prompt); confirmed ones can't.
+            try await c.run("UPDATE invoices SET status = 'pending', attempts = 0, last_error = NULL WHERE id = ? AND status IN ('failed','pending','proposed')", [.int(invoiceID)])
         }
     }
 

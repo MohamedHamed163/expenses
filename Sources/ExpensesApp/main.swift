@@ -36,7 +36,14 @@ enum CLI {
             case "--ask":
                 let search = SearchService(store: store, llm: llm)
                 let assistant = Assistant(llm: llm, store: store, search: search, categoryKeys: try await store.categories().map(\.key))
-                let turn = try await assistant.ask(args.dropFirst().joined(separator: " "))
+                // Multi-turn: separate turns with " || " to test follow-up questions.
+                let turns = args.dropFirst().joined(separator: " ").components(separatedBy: " || ")
+                for q in turns.dropLast() {
+                    let t = try await assistant.ask(q)
+                    print("Q: \(q)\n  tools: \(t.toolTrace)\n  answer: \(t.text)\n")
+                }
+                print("Q: \(turns.last ?? "")")
+                let turn = try await assistant.ask(turns.last ?? "")
                 for t in turn.toolTrace { print("tool: \(t)") }
                 for e in turn.effects {
                     switch e {
@@ -53,6 +60,12 @@ enum CLI {
                 for path in args.dropFirst() {
                     let r = try await VoiceInput.transcribeFile(path)
                     print("\((path as NSString).lastPathComponent) [\(r.language), \(String(format: "%.1f", r.seconds))s]: \(r.text)")
+                }
+            case "--reread":
+                let ingest = IngestService(store: store, llm: llm, filesDir: ExpenseStore.defaultURL().appendingPathComponent("files"))
+                for raw in args.dropFirst() {
+                    guard let id = Int64(raw) else { continue }
+                    print("#\(id): \(await ingest.retry(invoiceID: id))")
                 }
             case "--seed-demo":
                 // 14 months of plausible history through the normal audited write path.

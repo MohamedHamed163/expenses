@@ -60,6 +60,10 @@ public enum ToolCatalog {
                      description: "Semantic + keyword search over invoice contents (items, vendors, notes). Use for 'which invoice…', 'did I buy…', 'find the receipt…'.",
                      parametersJSON: #"{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}"#,
                      mutates: false),
+            ToolSpec(name: "get_invoice",
+                     description: "Full details of ONE invoice by id: every line item with quantity, unit price and line amount, subtotal, tax, total, date, vendor, status and review reasons. Use for questions about an invoice's items, quantities, prices or contents.",
+                     parametersJSON: #"{"type":"object","properties":{"invoice_id":{"type":"integer"}},"required":["invoice_id"]}"#,
+                     mutates: false),
             ToolSpec(name: "open_invoice", description: "Open an invoice in the app by id.",
                      parametersJSON: #"{"type":"object","properties":{"invoice_id":{"type":"integer"}},"required":["invoice_id"]}"#,
                      mutates: false),
@@ -231,13 +235,38 @@ public struct ToolExecutor: Sendable {
                     if let inv = try? await store.invoice(h.invoiceID) {
                         o["status"] = inv.status.rawValue
                         if let v = inv.vendor { o["vendor"] = v }
-                        if let d = inv.day { o["date"] = d.iso }
+                        o["date"] = inv.day?.iso ?? "not on the invoice (unknown)"
                         if let t = inv.totalMinor, let c = inv.currency { o["total"] = Money.format(t, currency: c) }
                     }
                     results.append(o)
                 }
-                return Result(forModel: Self.json(["results": results, "instruction": "Cite invoices as [#id]. Only state facts present in excerpts/fields."]),
+                return Result(forModel: Self.json(["results": results, "instruction": "Cite invoices as [#id]. Only state facts present in excerpts/fields. For items, quantities or prices call get_invoice."]),
                               effects: [.citations(hits.map(\.invoiceID))])
+
+            case "get_invoice":
+                guard let id = a.int("invoice_id") else { throw ExpensesError.invalid("invoice_id is required") }
+                let inv = try await store.invoice(id)
+                let cur = inv.currency ?? Money.base
+                let missing = "not on the invoice (unknown)"
+                var payload: [String: Any] = [
+                    "invoice_id": inv.id, "status": inv.status.rawValue,
+                    "counts_in_totals": inv.status == .confirmed,
+                    "vendor": inv.vendor ?? missing,
+                    "date": inv.day?.iso ?? missing,
+                    "currency": inv.currency ?? missing,
+                    "total": inv.totalMinor.map { Money.format($0, currency: cur) } ?? missing,
+                    "line_items": inv.lineItems.map { li -> [String: Any] in
+                        var o: [String: Any] = ["item": li.description, "quantity": li.quantity.truncatingRemainder(dividingBy: 1) == 0 ? Int(li.quantity) : li.quantity,
+                                                "line_amount": Money.format(li.totalMinor, currency: cur)]
+                        if let u = li.unitMinor { o["unit_price"] = Money.format(u, currency: cur) }
+                        else if li.quantity > 1 { o["unit_price"] = "not printed" }
+                        return o
+                    },
+                    "items_sum": Money.format(inv.lineItems.reduce(0) { $0 + $1.totalMinor }, currency: cur),
+                    "instruction": "Report fields exactly as given. If a field says unknown, say it is missing; never fill it from the conversation.",
+                ]
+                if !inv.reviewReasons.isEmpty, inv.status != .confirmed { payload["review_reasons"] = inv.reviewReasons }
+                return Result(forModel: Self.json(payload), effects: [.citations([id])])
 
             case "open_invoice":
                 guard let id = a.int("invoice_id") else { throw ExpensesError.invalid("invoice_id is required") }

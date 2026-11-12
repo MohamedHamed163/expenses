@@ -44,8 +44,9 @@ public actor Assistant {
         3. To see/plot/graph, call show_chart; the chart appears in the app. To change data, call the write tool; the app shows a Confirm card, so say it is waiting for confirmation, never that it is done.
         4. For questions about what was bought or which invoice, call search_invoices and cite invoices as [#id]. If nothing is found, say so; do not guess.
         5. If a request is ambiguous (e.g. which expense to delete), list candidates with list_expenses and ask.
-        6. To compare two periods, call compare_periods (it computes the difference); never subtract numbers yourself.
-        7. Reply briefly, in the language the [reply in …] tag on the user's message names.
+        6. For an invoice's items, quantities or prices, call get_invoice. Only state invoice fields that a tool returned; if a field is unknown (e.g. no date on the receipt), say it is missing. Never fill it in from what the user said.
+        7. To compare two periods, call compare_periods (it computes the difference); never subtract numbers yourself.
+        8. Reply briefly, in the language the [reply in …] tag on the user's message names.
         """
     }
 

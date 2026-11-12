@@ -108,7 +108,9 @@ public enum Money {
         f.locale = Locale(identifier: "en_US")
         f.minimumFractionDigits = minorDigits(currency)
         f.maximumFractionDigits = minorDigits(currency)
-        return f.string(from: NSDecimalNumber(decimal: toMajor(minor, currency: currency))) ?? "\(minor)"
+        let out = f.string(from: NSDecimalNumber(decimal: toMajor(minor, currency: currency))) ?? "\(minor)"
+        // NumberFormatter uses a no-break space ("EGP\u{00A0}270.00"); plain spaces copy cleanly into prompts and checks.
+        return out.replacingOccurrences(of: "\u{00A0}", with: " ").replacingOccurrences(of: "\u{202F}", with: " ")
     }
 
     private static func pow10(_ n: Int) -> Decimal {

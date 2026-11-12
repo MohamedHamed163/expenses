@@ -73,7 +73,7 @@ struct InvoicesView: View {
 
     var body: some View {
         @Bindable var model = model
-        HSplitView {
+        HStack(spacing: 0) {
             VStack(spacing: 0) {
                 Picker("", selection: $model.invoiceFilter) {
                     Text("All").tag(InvoiceStatus?.none)
@@ -91,7 +91,8 @@ struct InvoicesView: View {
                 }
                 dropZone
             }
-            .frame(minWidth: 260, idealWidth: 320)
+            .frame(width: 300)
+            Divider()
             Group {
                 if let id = model.selectedInvoiceID {
                     InvoiceDetailView(invoiceID: id).id("\(id)-\(model.revision)")
@@ -99,7 +100,7 @@ struct InvoicesView: View {
                     ContentUnavailableView("Select an invoice", systemImage: "doc.text.magnifyingglass", description: Text("Or drop PDFs and photos on the left."))
                 }
             }
-            .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .navigationTitle("Invoices")
         .toolbar { Button { showImporter = true } label: { Label("Import", systemImage: "square.and.arrow.down") } }
@@ -181,9 +182,23 @@ struct InvoiceDetailView: View {
     var body: some View {
         Group {
             if let inv = invoice {
-                HSplitView {
-                    Preview(path: inv.filePath).frame(minWidth: 160, idealWidth: 300)
-                    ScrollView { form(inv).padding(16) }.frame(minWidth: 260)
+                // Side by side when there is room, stacked otherwise; the preview never sizes the layout.
+                GeometryReader { geo in
+                    if geo.size.width >= 720 {
+                        HStack(spacing: 0) {
+                            InvoicePreview(path: inv.filePath).frame(width: geo.size.width * 0.42)
+                            Divider()
+                            ScrollView { form(inv).padding(16) }.frame(maxWidth: .infinity)
+                        }
+                    } else {
+                        ScrollView {
+                            VStack(spacing: 0) {
+                                InvoicePreview(path: inv.filePath).frame(height: 320)
+                                Divider()
+                                form(inv).padding(16)
+                            }
+                        }
+                    }
                 }
             } else { ProgressView() }
         }
@@ -200,63 +215,131 @@ struct InvoiceDetailView: View {
         category = inv.categoryKey ?? "other"
     }
 
+    var editable: Bool { invoice.map { $0.status == .proposed } ?? false }
+
     @ViewBuilder func form(_ inv: Invoice) -> some View {
+        let cur = inv.currency ?? "USD"
         VStack(alignment: .leading, spacing: 12) {
-            HStack { Text("Invoice #\(inv.id)").font(.title3.bold()); StatusBadge(status: inv.status); Spacer() }
-            Text(inv.originalName).font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Text("Invoice #\(inv.id)").font(.title3.bold())
+                StatusBadge(status: inv.status)
+                Spacer()
+                if let c = inv.confidence, inv.status != .pending {
+                    Text("AI confidence \(Int(c * 100))%").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Text(inv.originalName).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             if !inv.reviewReasons.isEmpty && inv.status != .confirmed {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(inv.reviewReasons, id: \.self) { r in Label(r, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.callout) }
+                    ForEach(inv.reviewReasons, id: \.self) { r in
+                        Label(r, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
+                .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
             }
             if let err = inv.lastError, inv.status == .failed || inv.status == .pending {
                 Label("\(err.prefix(200))", systemImage: "xmark.octagon").foregroundStyle(.red).font(.callout)
             }
-            if let c = inv.confidence, inv.status != .pending { Text("AI confidence \(Int(c * 100))%").font(.caption).foregroundStyle(.secondary) }
-            Form {
-                TextField("Vendor", text: $vendor)
-                TextField("Date (YYYY-MM-DD)", text: $date)
-                TextField("Currency (ISO)", text: $currency)
-                TextField("Total", text: $total)
-                Picker("Category", selection: $category) {
-                    ForEach(model.categories) { c in Text("\(c.nameEN) · \(c.nameAR)").tag(c.key) }
-                }
-            }
-            .disabled(inv.status == .confirmed || inv.status == .rejected)
-            if !inv.lineItems.isEmpty {
-                GroupBox("Line items") {
-                    ForEach(Array(inv.lineItems.enumerated()), id: \.offset) { _, li in
-                        HStack {
-                            Text(li.description).lineLimit(1)
-                            Spacer()
-                            Text("× \(li.quantity.formatted())").foregroundStyle(.secondary)
-                            Text(Money.format(li.totalMinor, currency: inv.currency ?? "USD")).monospacedDigit()
-                        }.font(.callout)
+            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
+                GridRow { Text("Vendor").foregroundStyle(.secondary); TextField("Vendor", text: $vendor) }
+                GridRow {
+                    Text("Date").foregroundStyle(.secondary)
+                    HStack {
+                        TextField("YYYY-MM-DD", text: $date)
+                        if editable { Button("Today") { date = Day.today.iso }.controlSize(.small) }
                     }
                 }
-            }
-            HStack {
-                switch inv.status {
-                case .proposed:
-                    Button("Confirm") { Task { await model.confirm(inv.id, corrected: corrected(inv)) } }
-                        .keyboardShortcut(.defaultAction).disabled(corrected(inv) == nil)
-                    Button("Reject", role: .destructive) { Task { await model.reject(inv.id) } }
-                case .failed, .pending:
-                    Button("Retry AI") { Task { await model.retry(inv.id) } }
-                case .confirmed:
-                    Label("Counts in your totals", systemImage: "checkmark.seal.fill").foregroundStyle(.green)
-                    Spacer()
-                    Button("Reject", role: .destructive) { Task { await model.reject(inv.id) } }
-                case .rejected:
-                    Text("Rejected. Undo (⌘Z) to restore.").foregroundStyle(.secondary)
+                GridRow { Text("Currency").foregroundStyle(.secondary); TextField("e.g. EGP", text: $currency) }
+                GridRow { Text("Total").foregroundStyle(.secondary); TextField("0.00", text: $total) }
+                GridRow {
+                    Text("Category").foregroundStyle(.secondary)
+                    Picker("", selection: $category) {
+                        ForEach(model.categories) { c in Text("\(c.nameEN) · \(c.nameAR)").tag(c.key) }
+                    }.labelsHidden()
                 }
             }
+            .textFieldStyle(.roundedBorder)
+            .disabled(!editable)
+            if inv.day == nil && date.isEmpty && editable {
+                Text("No date is printed on this receipt. Enter it, or tap Today.").font(.caption).foregroundStyle(.orange)
+            }
+            if !inv.lineItems.isEmpty { lineItems(inv, cur: cur) }
+            actions(inv)
             if let text = inv.ocrText, !text.isEmpty {
                 DisclosureGroup("Extracted text", isExpanded: $showText) {
                     Text(text).font(.caption.monospaced()).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
+    }
+
+    func lineItems(_ inv: Invoice, cur: String) -> some View {
+        let sum = inv.lineItems.reduce(Int64(0)) { $0 + $1.totalMinor }
+        let matches = inv.totalMinor.map { Double(abs(sum - $0)) <= max(Double($0) * 0.01, 1) } ?? false
+        return GroupBox {
+            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
+                GridRow {
+                    Text("Item"); Text("Qty").gridColumnAlignment(.trailing); Text("Amount").gridColumnAlignment(.trailing)
+                }.font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Divider()
+                ForEach(Array(inv.lineItems.enumerated()), id: \.offset) { _, li in
+                    GridRow {
+                        Text(li.description).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                        Text("× \(li.quantity.formatted())").foregroundStyle(.secondary)
+                        Text(Money.format(li.totalMinor, currency: cur)).monospacedDigit()
+                    }.font(.callout)
+                }
+                Divider()
+                GridRow {
+                    Text("Items total").font(.callout.weight(.semibold))
+                    Text("")
+                    HStack(spacing: 4) {
+                        Image(systemName: matches ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(matches ? .green : .orange)
+                        Text(Money.format(sum, currency: cur)).monospacedDigit().font(.callout.weight(.semibold))
+                    }
+                }
+            }
+        } label: { Text("Line items (\(inv.lineItems.count))") }
+    }
+
+    @ViewBuilder func actions(_ inv: Invoice) -> some View {
+        switch inv.status {
+        case .proposed:
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Button("Confirm") { Task { await model.confirm(inv.id, corrected: corrected(inv)) } }
+                        .keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
+                        .disabled(corrected(inv) == nil)
+                    Button("Reject", role: .destructive) { Task { await model.reject(inv.id) } }
+                    Spacer()
+                    Button { Task { await model.retry(inv.id) } } label: { Label("Re-read with AI", systemImage: "arrow.clockwise") }
+                }
+                if !missingFields.isEmpty {
+                    Text("To confirm, fill in: \(missingFields.joined(separator: ", ")).").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        case .failed, .pending:
+            Button { Task { await model.retry(inv.id) } } label: { Label("Retry AI", systemImage: "arrow.clockwise") }
+        case .confirmed:
+            HStack {
+                Label("Counts in your totals", systemImage: "checkmark.seal.fill").foregroundStyle(.green)
+                Spacer()
+                Button("Reject", role: .destructive) { Task { await model.reject(inv.id) } }
+            }
+        case .rejected:
+            Text("Rejected. Undo (⌘Z) to restore.").foregroundStyle(.secondary)
+        }
+    }
+
+    var missingFields: [String] {
+        var m: [String] = []
+        if Day(parsing: date) == nil { m.append("date (YYYY-MM-DD)") }
+        if Money.normalizeCurrency(currency) == nil { m.append("currency") }
+        if (Money.parseAmount(total) ?? 0) <= 0 { m.append("total") }
+        return m
     }
 
     /// The user's edits as an ExtractedInvoice; nil if a required field is invalid.
@@ -268,16 +351,53 @@ struct InvoiceDetailView: View {
     }
 }
 
-struct Preview: NSViewRepresentable {
+/// Invoice preview that always fits its column: PDFs via PDFKit, photos scaled to
+/// fit the width (tall phone receipts scroll vertically) with zoom controls.
+struct InvoicePreview: View {
     let path: String
-    func makeNSView(context: Context) -> NSView {
-        let url = URL(fileURLWithPath: path)
-        if url.pathExtension.lowercased() == "pdf" {
-            let v = PDFView(); v.autoScales = true; v.document = PDFDocument(url: url); return v
+    @State private var zoom: CGFloat = 1
+    var isPDF: Bool { path.lowercased().hasSuffix(".pdf") }
+
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            if isPDF {
+                PDFPreview(path: path)
+            } else if let img = NSImage(contentsOfFile: path) {
+                GeometryReader { geo in
+                    ScrollView([.vertical, .horizontal]) {
+                        Image(nsImage: img).resizable().interpolation(.high).scaledToFit()
+                            .frame(width: max(100, (geo.size.width - 24) * zoom))
+                            .padding(12)
+                    }
+                }
+                HStack(spacing: 2) {
+                    Button { zoom = max(0.5, zoom - 0.25) } label: { Image(systemName: "minus.magnifyingglass") }
+                    Button { zoom = 1 } label: { Text("Fit").font(.caption) }
+                    Button { zoom = min(4, zoom + 0.25) } label: { Image(systemName: "plus.magnifyingglass") }
+                }
+                .buttonStyle(.borderless).padding(6)
+                .background(.regularMaterial, in: Capsule()).padding(10)
+            } else {
+                ContentUnavailableView("Can't preview this file", systemImage: "doc")
+            }
         }
-        let iv = NSImageView(); iv.image = NSImage(contentsOf: url); iv.imageScaling = .scaleProportionallyUpOrDown; return iv
+        .background(Color.black.opacity(0.15))
+        .clipped()
     }
-    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+struct PDFPreview: NSViewRepresentable {
+    let path: String
+    func makeNSView(context: Context) -> PDFView {
+        let v = PDFView()
+        v.autoScales = true
+        v.displaysPageBreaks = true
+        v.document = PDFDocument(url: URL(fileURLWithPath: path))
+        v.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        v.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        return v
+    }
+    func updateNSView(_ nsView: PDFView, context: Context) {}
 }
 
 // MARK: - Analytics

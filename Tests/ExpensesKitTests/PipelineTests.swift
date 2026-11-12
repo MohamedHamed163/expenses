@@ -314,3 +314,91 @@ struct DryRunRegressionTests {
         #expect(Assistant.filterCitations([.citations([5, 4])], text: "No laptop found.") == [.citations([5])])
     }
 }
+
+@Suite("Receipt photo regressions")
+struct ReceiptRegressionTests {
+    /// The Starbucks receipt: "Cappuccino x2 270.00" is the line total; the model returned unit 270 x 2.
+    @Test func printedLineTotalsAreRepairedWhenThatBalancesTheReceipt() throws {
+        let json = #"""
+        {"vendor":"Starbucks","date":null,"currency":"EGP","subtotal":710.00,"tax":null,"total":739.99,"category":"food",
+         "line_items":[{"description":"Turkey Cheese Brown Panini Hot","quantity":1,"unit_price":210,"total":210},
+                       {"description":"Four Cheese Focaccia Sandwich Hot","quantity":1,"unit_price":210,"total":210},
+                       {"description":"Cappuccino Skimmed Milk","quantity":2,"unit_price":270,"total":540},
+                       {"description":"Venti","quantity":2,"total":20},
+                       {"description":"Service Fee","quantity":1,"total":29.99}],"confidence":0.95}
+        """#
+        let e = try InvoiceExtractor.parse(json: json, categoryKeys: ["food", "other"])
+        let cappuccino = e.lineItems[2]
+        #expect(cappuccino.totalMinor == 27000 && cappuccino.unitMinor == nil)
+        #expect(e.lineItems.reduce(0) { $0 + $1.totalMinor } == 73999)
+        #expect(e.day == nil)
+        let reasons = Validator.decide(e, today: d("2026-11-12"), hasRate: true, duplicateOf: nil).reasons
+        #expect(reasons == ["Date not found"])          // the totals now balance; only the missing date remains
+    }
+
+    @Test func correctUnitPricesAreNotTouched() throws {
+        // 2 x 350 = 700 really is the line total here; the items already balance, so no repair.
+        let e = try InvoiceExtractor.parse(json: goodInvoiceJSON, categoryKeys: ["groceries"])
+        #expect(e.lineItems[0].totalMinor == 70000 && e.lineItems[0].unitMinor == 35000)
+    }
+
+    @Test func getInvoiceListsItemsAndSaysWhenTheDateIsMissing() async throws {
+        let (store, dir) = try await makeStore()
+        let id = try await store.insertPendingInvoice(sha256: "sb", filePath: dir.path + "/sb.jpeg", originalName: "sb.jpeg")
+        let e = ExtractedInvoice(vendor: "Starbucks", day: nil, currency: "EGP", totalMinor: 73999, categoryKey: "food",
+                                 lineItems: [LineItem(description: "Cappuccino", quantity: 2, unitMinor: nil, totalMinor: 27000),
+                                             LineItem(description: "Panini", quantity: 1, unitMinor: 21000, totalMinor: 21000)],
+                                 confidence: 0.95)
+        try await store.applyExtraction(invoiceID: id, extracted: e, ocrText: "", rawJSON: "{}", reasons: ["Date not found"], duplicateOf: nil, autoConfirm: false)
+        let ex = ToolExecutor(store: store, search: SearchService(store: store, llm: nil), today: d("2026-11-12"))
+        let r = await ex.run(ToolCall(name: "get_invoice", argumentsJSON: "{\"invoice_id\":\(id)}"))
+        #expect(r.forModel.contains("\"date\":\"not on the invoice (unknown)\""))
+        #expect(r.forModel.contains("\"item\":\"Cappuccino\",\"line_amount\":\"EGP 270.00\",\"quantity\":2,\"unit_price\":\"not printed\""))
+        #expect(r.forModel.contains("\"unit_price\":\"EGP 210.00\""))
+        #expect(r.forModel.contains("\"counts_in_totals\":false"))
+        try await store.dropSchema()
+    }
+
+    @Test func proposedInvoicesCanBeReRead() async throws {
+        let (store, dir) = try await makeStore()
+        let id = try await store.insertPendingInvoice(sha256: "rr", filePath: dir.path + "/rr.pdf", originalName: "rr.pdf")
+        try await store.applyExtraction(invoiceID: id, extracted: ExtractedInvoice(confidence: 0.2), ocrText: "", rawJSON: "{}", reasons: ["x"], duplicateOf: nil, autoConfirm: false)
+        try await store.resetForRetry(invoiceID: id)
+        #expect(try await store.pendingInvoiceIDs() == [id])
+        try await store.dropSchema()
+    }
+}
+
+@Suite("Missing printed line recovery")
+struct MissingLineTests {
+    let ocr = """
+    Cappuccino x 2
+    270.00
+    Skimmed Milk x 2
+    --
+    Venti x 2
+    20.00
+    Starbucks Signature
+    -- Espresso Dark Roast
+    ج.م. 710.00
+    Service Fee
+    29.99
+    """
+    let items = [LineItem(description: "Panini", quantity: 1, unitMinor: 21000, totalMinor: 21000),
+                 LineItem(description: "Focaccia", quantity: 1, unitMinor: 21000, totalMinor: 21000),
+                 LineItem(description: "Cappuccino Skimmed Milk Venti", quantity: 2, unitMinor: nil, totalMinor: 27000),
+                 LineItem(description: "Service Fee", quantity: 1, unitMinor: nil, totalMinor: 2999)]
+
+    @Test func addsTheExactPrintedAmountThatBalancesTheReceipt() {
+        let out = InvoiceExtractor.recoverMissingLine(items, ocrText: ocr, currency: "EGP", subtotal: 71000, tax: nil, total: 73999)
+        #expect(out.count == 5)
+        #expect(out.last == LineItem(description: "Venti x 2", quantity: 2, unitMinor: nil, totalMinor: 2000))
+        #expect(out.reduce(0) { $0 + $1.totalMinor } == 73999)
+    }
+
+    @Test func leavesItemsAloneWhenNoPrintedAmountFits() {
+        let out = InvoiceExtractor.recoverMissingLine(items, ocrText: "Venti x 2\n15.00", currency: "EGP", subtotal: 71000, tax: nil, total: 73999)
+        #expect(out == items)
+        #expect(InvoiceExtractor.recoverMissingLine(items, ocrText: ocr, currency: "EGP", subtotal: nil, tax: nil, total: 71999) == items)
+    }
+}
