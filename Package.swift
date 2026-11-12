@@ -10,6 +10,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/vapor/postgres-nio.git", from: "1.21.0"),
+        .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.9.0"),
     ],
     targets: [
         .target(
@@ -20,7 +21,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "ExpensesApp",
-            dependencies: ["ExpensesKit"],
+            dependencies: ["ExpensesKit", .product(name: "WhisperKit", package: "WhisperKit")],
             path: "Sources/ExpensesApp",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),

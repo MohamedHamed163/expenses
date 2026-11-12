@@ -7,6 +7,7 @@ struct SpendChart: View {
     let rows: [AggregateRow]
     let kind: ChartKind
     var height: CGFloat = 260
+    var maxLabels: Int = 8
 
     var body: some View {
         if rows.isEmpty || rows.allSatisfy({ $0.usdMinor == 0 }) {
@@ -30,9 +31,10 @@ struct SpendChart: View {
         case .line:
             Chart(rows) { r in
                 LineMark(x: .value("Period", r.label), y: .value("USD", Double(r.usdMinor) / 100))
+                    .foregroundStyle(Brand.emerald)
                     .interpolationMethod(.monotone)
                 AreaMark(x: .value("Period", r.label), y: .value("USD", Double(r.usdMinor) / 100))
-                    .foregroundStyle(.linearGradient(colors: [.accentColor.opacity(0.25), .clear], startPoint: .top, endPoint: .bottom))
+                    .foregroundStyle(.linearGradient(colors: [Brand.emerald.opacity(0.28), .clear], startPoint: .top, endPoint: .bottom))
                     .interpolationMethod(.monotone)
             }
             .chartXAxis { axis }
@@ -40,7 +42,7 @@ struct SpendChart: View {
         case .bar:
             Chart(rows) { r in
                 BarMark(x: .value("Period", r.label), y: .value("USD", Double(r.usdMinor) / 100))
-                    .foregroundStyle(Color.accentColor.gradient)
+                    .foregroundStyle(Brand.gradient)
                     .cornerRadius(3)
             }
             .chartXAxis { axis }
@@ -49,7 +51,7 @@ struct SpendChart: View {
     }
 
     /// 12 distinct hues so categories never share a color.
-    static let palette: [Color] = [.blue, .green, .orange, .purple, .red, .teal, .yellow, .pink, .indigo, .mint, .brown, .gray]
+    static let palette: [Color] = [Brand.emerald, Brand.teal, Brand.gold, .purple, .red, .blue, .orange, .pink, .indigo, .mint, .brown, .gray]
 
     /// "Jan 2026" -> "Jan ’26" so 12 monthly labels fit.
     static func short(_ label: String) -> String {
@@ -60,7 +62,7 @@ struct SpendChart: View {
 
     /// Show at most ~8 x labels so 365 daily bars stay readable.
     var axis: some AxisContent {
-        let stride = max(1, Int((Double(rows.count) / 8).rounded(.up)))
+        let stride = max(1, Int((Double(rows.count) / Double(maxLabels)).rounded(.up)))
         let shown = Set(rows.enumerated().filter { $0.offset % stride == 0 }.map(\.element.label))
         return AxisMarks { v in
             if let s = v.as(String.self), shown.contains(s) {

@@ -12,7 +12,7 @@ struct ExpensesMacApp: App {
                 .task { await model.start() }
         }
         .windowToolbarStyle(.unified)
-        .defaultSize(width: 1500, height: 940)
+        .defaultSize(width: 1280, height: 860)
     }
 }
 
@@ -49,6 +49,11 @@ enum CLI {
                 }
                 if !turn.unverifiedNumbers.isEmpty { print("UNVERIFIED: \(turn.unverifiedNumbers)") }
                 print("answer: \(turn.text)")
+            case "--transcribe":
+                for path in args.dropFirst() {
+                    let r = try await VoiceInput.transcribeFile(path)
+                    print("\((path as NSString).lastPathComponent) [\(r.language), \(String(format: "%.1f", r.seconds))s]: \(r.text)")
+                }
             case "--seed-demo":
                 // 14 months of plausible history through the normal audited write path.
                 var rng = SystemRandomNumberGenerator()

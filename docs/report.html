@@ -39,11 +39,11 @@
   <h1>Expenses</h1>
   <p style="font-size:13pt;margin:0">A private macOS expense tracker with invoice RAG, charts and full control by chat and voice</p>
   <p class="muted">Build report: what was built, how it works, what was tested, and which frameworks were used · 12 November 2026</p>
-  <span class="tag">Swift 6 · SwiftUI</span><span class="tag">Postgres 17 + pgvector 0.8.7</span><span class="tag">Ollama · qwen3.5:9b</span><span class="tag">Apple Vision OCR</span><span class="tag">Apple Speech (on-device)</span><span class="tag">Swift Charts</span><span class="tag">41 tests passing + 1M-row benchmark</span>
+  <span class="tag">Swift 6 · SwiftUI</span><span class="tag">Postgres 17 + pgvector 0.8.7</span><span class="tag">Ollama · qwen3.5:9b</span><span class="tag">Apple Vision OCR</span><span class="tag">Whisper (WhisperKit, on-device)</span><span class="tag">Swift Charts</span><span class="tag">43 tests passing + 1M-row benchmark</span>
 </div>
 
 <h2>1. Summary</h2>
-<p>Expenses is a native macOS app. You drop invoices in (PDF, scan or phone photo, in Arabic or English), a <b>local</b> AI model reads them, and every confirmed invoice becomes an expense in USD. The app has a dashboard, charts by day, month, year, category and vendor, and an <b>Ask AI</b> panel that answers questions and drives the whole app through tool calls. You can type or hold the mic to speak. All AI and all data stay on the Mac: Ollama for the models, Apple Vision for OCR, Apple Speech for voice, and a local Postgres 17 database with pgvector for both the data and the RAG index.</p>
+<p>Expenses is a native macOS app. You drop invoices in (PDF, scan or phone photo, in Arabic or English), a <b>local</b> AI model reads them, and every confirmed invoice becomes an expense in USD. The app has a dashboard, charts by day, month, year, category and vendor, and an <b>Ask AI</b> panel that answers questions and drives the whole app through tool calls. The assistant is branded <b>Wallet</b> ("Hello, I'm Wallet, your personal financial assistant"); you can type, or tap the mic and talk to it. All AI and all data stay on the Mac: Ollama for the models, Apple Vision for OCR, local Whisper for voice, and a local Postgres 17 database with pgvector for both the data and the RAG index.</p>
 <div class="callout"><b>Core design rule: the model reads and talks, code decides the numbers.</b> Totals and charts come only from SQL. Money is integer minor units. Auto-confirmation is a deterministic validator. Any write the AI proposes waits for a Confirm click and can be undone. Any dollar amount in an AI answer that no tool produced is flagged on screen.</div>
 
 <table>
@@ -54,7 +54,7 @@
   <tr><td>Ask AI about expenses per month, day and so on</td><td>A tool-calling agent with 14 tools (<code>query_expenses</code>, <code>show_chart</code>, <code>compare_periods</code>, <code>search_invoices</code>…). Every figure comes from SQL</td></tr>
   <tr><td>Graphs</td><td>Swift Charts (bar, line, donut), by day, month, year, category or vendor, with empty periods filled with zeros</td></tr>
   <tr><td>Full control by chatting</td><td>The chat can navigate, open invoices, draw charts, add, edit, split and delete expenses, confirm invoices, set exchange rates and undo</td></tr>
-  <tr><td>Voice</td><td>Push-to-talk with on-device Apple Speech (Arabic or English). The transcript appears in the box before it is sent</td></tr>
+  <tr><td>Voice</td><td>Tap the mic and talk to Wallet. Local Whisper large-v3 turbo (WhisperKit) transcribes Arabic and English on-device in about 1 s and picks the language automatically. The spoken text is shown as your message</td></tr>
   <tr><td>Past-year graph</td><td>"Show me last year's expenses by month as a graph" → <code>show_chart(period: 2025, group_by: month)</code> → Analytics screen</td></tr>
   <tr><td>PDF of what was done</td><td>This document</td></tr>
 </table>
@@ -70,7 +70,7 @@
   <tr><td>Auto-confirm</td><td>Only if every check passes</td><td>Confidence ≥ 0.9, line items explain the total within ±1%, date within 10 years and not in the future, currency and rate known, not a likely duplicate</td></tr>
   <tr><td>Duplicates</td><td>Block exact copies, flag likely ones</td><td>UNIQUE <code>file_sha256</code>. Same vendor, day and total from another file → "Needs review"</td></tr>
   <tr><td>AI writes</td><td>Confirm card plus undo log</td><td>Write tools only produce a <code>PendingAction</code>. Each committed write is one transaction plus an <code>audit_log</code> row holding the inverse operation</td></tr>
-  <tr><td>Voice</td><td>Push-to-talk, on-device</td><td><code>requiresOnDeviceRecognition = true</code>. The transcript must be sent by the user</td></tr>
+  <tr><td>Voice</td><td>On-device only. Changed after testing: Apple Speech has no on-device Arabic model on this Mac, so it was replaced by local Whisper</td><td>WhisperKit with <code>large-v3 turbo</code> (632 MB, downloaded once). Language restricted to Arabic or English. Spoken commands are sent on stop, and writes still need Confirm</td></tr>
   <tr><td>AI offline</td><td>Queue and retry, app stays usable</td><td>The upload is saved first as <code>pending</code>, retried 3 times with backoff, then marked <code>failed</code> with a Retry button. Pending work is processed on the next launch</td></tr>
   <tr><td>Database (changed mid-build)</td><td><b>Postgres 17 + pgvector for all data</b></td><td>The first version used SQLite and passed all tests. On request it was moved entirely to Postgres so an invoice and its vectors commit atomically and vector search uses HNSW</td></tr>
 </table>
@@ -135,7 +135,9 @@
   <tr><td>list_expenses · search_invoices · open_invoice · navigate</td><td>read</td><td>Lists with ids, hybrid RAG search with citations, opening an invoice, switching screens</td></tr>
   <tr><td>add / edit / delete / split expense · confirm_invoice · set_exchange_rate · undo_last</td><td>write</td><td>Validated immediately, so bad arguments go back to the model. Executed only after Confirm, then re-validated, run in a transaction and audited</td></tr>
 </table>
-<h3>4.3 How hallucination is controlled</h3>
+<h3>4.3 Voice and the Wallet identity</h3>
+<p>The assistant is presented as <b>Wallet</b>, with a wallet-and-coin mark on an emerald-to-teal gradient that is also used for the app icon, the charts and the chat bubbles. The chat panel opens with the greeting "Hello, I'm Wallet, your personal financial assistant" in English and Arabic, a large tap-to-talk microphone and four suggestion chips. Voice is captured with AVAudioEngine and resampled to 16 kHz mono. Whisper first detects the language, the app restricts it to Arabic or English, and then it transcribes on-device in about 1 s. The transcript is sent as your message with a "Voice" badge, and any write it triggers still needs Confirm.</p>
+<h3>4.4 How hallucination is controlled</h3>
 <ul>
   <li><b>Numbers come only from tools.</b> Tool results carry amounts already formatted by code (<code>"$643.50"</code>). Charts and tables render the tool's rows, not the model's text.</li>
   <li><b>Unverified-number guard.</b> Every money amount in the final answer is checked against the numbers that appeared in tool outputs. Anything else is shown as "Not from your data". In the dry run this caught a subtraction the model did itself.</li>
@@ -145,7 +147,7 @@
   <li><b>A bounded loop.</b> The agent gets at most 6 tool rounds, and unknown tools are rejected.</li>
 </ul>
 
-<h3>4.4 Data model and database optimisation</h3>
+<h3>4.5 Data model and database optimisation</h3>
 <pre>expenses(id, invoice_id?, day BIGINT yyyymmdd, category_id, vendor_id?, amount_minor, currency,
          fx_rate_e6, usd_minor, note, created_at, deleted_at?)            -- soft delete for undo
   expenses_day      (day)              INCLUDE (usd_minor) WHERE deleted_at IS NULL
@@ -163,7 +165,7 @@ audit_log(id, action, actor user|ai|auto, summary, undo_json JSONB, undone)</pre
 </ul>
 
 <h2 class="page-break">5. Testing</h2>
-<p><b>41 automated tests pass</b> (Swift Testing). Each test runs in its own Postgres schema. A 42nd test, the 1M-row benchmark, is opt-in (<code>EXPENSES_BENCH=1</code>) and also passes.</p>
+<p><b>43 automated tests pass</b> (Swift Testing). Each test runs in its own Postgres schema. A 44th test, the 1M-row benchmark, is opt-in (<code>EXPENSES_BENCH=1</code>) and also passes.</p>
 <table>
   <tr><th>Suite</th><th class="num">Tests</th><th>What it proves</th></tr>
   <tr><td>Money · Day</td><td class="num">6</td><td>Amount formats (<code>1.234,50</code>, <code>١٬٢٣٤٫٥٠</code>), currency symbols, minor digits (KWD/JPY), frozen USD conversion, date parsing and ranges</td></tr>
@@ -173,6 +175,7 @@ audit_log(id, action, actor user|ai|auto, summary, undo_json JSONB, undone)</pre
   <tr><td>Assistant (fake model)</td><td class="num">8</td><td>Totals from the DB; invented numbers flagged; exact chart data; writes wait for Confirm and can be undone; bad arguments return to the model; citations and "not found"; bounded loop; future dates and unknown tools rejected</td></tr>
   <tr><td>Postgres specifics</td><td class="num">3</td><td>10 concurrent identical uploads → 1 invoice; HNSW vector search ranking; Arabic full-text search</td></tr>
   <tr><td>Dry-run regressions</td><td class="num">5</td><td>Date anchors; reply language; code-written pending text; <code>compare_periods</code>; citation filtering</td></tr>
+  <tr><td>Voice language</td><td class="num">2</td><td>Arabic/English choice from Whisper log-probabilities (regression: a missing language must not count as probability 0)</td></tr>
 </table>
 
 <h3>5.1 Scalability: 1,000,000 expenses</h3>
@@ -206,6 +209,8 @@ audit_log(id, action, actor user|ai|auto, summary, undo_json JSONB, undone)</pre
 
 <h2 class="page-break">6. Screenshots (running app, demo database)</h2>
 <div class="grid2">
+  <figure><img src="screenshots/wallet-welcome.png"><figcaption>Wallet: "Hello, I'm Wallet, your personal financial assistant", with a tap-to-talk mic and suggestions</figcaption></figure>
+  <figure><img src="screenshots/wallet-conversation.png"><figcaption>Talking to Wallet: a chart request and an Arabic question, answered from SQL in brand colors</figcaption></figure>
   <figure><img src="screenshots/dashboard.png"><figcaption>Dashboard: month, last month and year-to-date stats, 12-month chart, categories, recent expenses</figcaption></figure>
   <figure><img src="screenshots/ai-chart.png"><figcaption>"Show me last year's expenses by month as a graph" → show_chart → Analytics</figcaption></figure>
   <figure><img src="screenshots/ai-arabic-confirm.png"><figcaption>An Arabic question answered from SQL; "add 12 dollars taxi yesterday" → Confirm card</figcaption></figure>
@@ -229,7 +234,7 @@ audit_log(id, action, actor user|ai|auto, summary, undo_json JSONB, undone)</pre
   <tr><td>Chat, tools, vision model</td><td><code>qwen3.5:9b</code> (tools + vision, thinking off, temperature 0)</td><td>One local model for extraction, photo reading and tool calling; handles Arabic</td></tr>
   <tr><td>Embeddings</td><td><code>qwen3-embedding:0.6b</code> (1024 dimensions)</td><td>Multilingual and small</td></tr>
   <tr><td>PDF and OCR</td><td>PDFKit, Apple Vision <code>VNRecognizeTextRequest</code> (ar-SA, en-US)</td><td>On-device, built into macOS</td></tr>
-  <tr><td>Voice</td><td>Apple Speech <code>SFSpeechRecognizer</code> (on-device only) + AVAudioEngine</td><td>Push-to-talk, audio never leaves the Mac</td></tr>
+  <tr><td>Voice</td><td>WhisperKit 0.18 (Whisper large-v3 turbo, Core ML / Neural Engine) + AVAudioEngine 16 kHz capture</td><td>Arabic (incl. Egyptian) and English fully on-device; audio never leaves the Mac</td></tr>
   <tr><td>Hashing</td><td>CryptoKit SHA-256</td><td>Exact-duplicate detection</td></tr>
   <tr><td>Tests</td><td>Swift Testing (<code>@Test</code>, <code>#expect</code>), a fake LLM, a schema per test</td><td>Deterministic tests of the AI paths, isolated from each other</td></tr>
   <tr><td>Build</td><td>Swift Package Manager, <code>scripts/make_app.sh</code> (ad-hoc signed .app)</td><td>No Xcode project needed</td></tr>
@@ -243,7 +248,7 @@ scripts/make_app.sh &amp;&amp; open build/Expenses.app
 
 # tests (needs a database called expenses_test with the vector extension)
 createdb expenses_test &amp;&amp; psql -d expenses_test -c "CREATE EXTENSION vector"
-swift test                                   # 41 tests (+ opt-in benchmark)
+swift test                                   # 43 tests (+ opt-in benchmark)
 EXPENSES_BENCH=1 swift test -c release --filter Scale   # 1M-row benchmark
 
 # headless
@@ -256,7 +261,7 @@ build/Expenses.app/Contents/MacOS/ExpensesApp --ask "How much did I spend last m
   <tr><td>Exchange rates</td><td>Defaults are approximate and editable. There is no live rate feed, because the app is local-first. A dated-rate import could be added</td></tr>
   <tr><td>"All time" aggregate</td><td>56 ms at 1M rows and linear in size; add a <code>monthly_totals</code> rollup if needed</td></tr>
   <tr><td>Extraction accuracy at scale</td><td>Measured on 8 generated invoices, all correct. A labelled set of about 30 real invoices is needed to report field-level accuracy</td></tr>
-  <tr><td>Voice in Arabic</td><td>Requires the Arabic on-device dictation model to be installed; the app explains this if it is missing. Not exercised in automated tests, which need a microphone</td></tr>
+  <tr><td>Voice accuracy</td><td>Tested with 5 synthetic TTS clips: English 2/2 exact, Arabic 2/3 exact. The miss ("كم … اللي فات" heard as "كيلو متر … ليفات") changed the period the assistant chose. The transcript is shown as your message, so you can see such errors. A vocabulary prompt was tried and made results worse, so it was removed. Needs testing with real voices</td></tr>
   <tr><td>Model speed</td><td>6–13 s per invoice and 6–17 s per chat answer on this Mac with a 9B model</td></tr>
   <tr><td>Distribution</td><td>Ad-hoc signed and requires a local Postgres service. A notarized build with bundled Postgres setup is future work</td></tr>
   <tr><td>Multi-page invoices</td><td>OCR reads up to 5 pages, and the vision model sees page 1</td></tr>

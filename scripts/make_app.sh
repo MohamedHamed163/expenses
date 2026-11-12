@@ -21,11 +21,12 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleVersion</key><string>1</string>
     <key>LSMinimumSystemVersion</key><string>15.0</string>
     <key>NSHighResolutionCapable</key><true/>
-    <key>NSMicrophoneUsageDescription</key><string>Expenses listens only while you hold the mic button, to turn your voice into a chat command. Audio is transcribed on this Mac.</string>
-    <key>NSSpeechRecognitionUsageDescription</key><string>Expenses transcribes push-to-talk voice commands on-device (Arabic and English).</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>NSMicrophoneUsageDescription</key><string>Wallet listens only after you tap the mic, to turn your voice into a question or command. Audio is transcribed on this Mac by a local Whisper model and never leaves it.</string>
 </dict>
 </plist>
 PLIST
+cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 codesign --force --sign - "$APP" 2>/dev/null || true
 echo "Built $APP"

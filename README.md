@@ -1,8 +1,10 @@
-# Expenses
+<p align="center"><img src="docs/wallet-icon.png" width="96" alt="Wallet"></p>
+
+# Expenses, with **Wallet**, your personal financial assistant
 
 **A private macOS expense tracker.** Drop in invoices (PDF, scan or phone photo, Arabic or English), let a **local** AI read them, see charts by day, month or year, and control the whole app by **chatting or speaking** to it. Nothing leaves your Mac.
 
-![Dashboard](docs/screenshots/dashboard.png)
+![Hello, I'm Wallet](docs/screenshots/wallet-welcome.png)
 
 📄 **Build report (PDF):** [docs/Expenses-Build-Report.pdf](docs/Expenses-Build-Report.pdf) covers what was built, how it works, the test and benchmark results, and the frameworks used.
 
@@ -15,7 +17,7 @@
 | 💱 **Multi-currency** | Amounts stored as integer minor units (KWD has 3 decimals, JPY 0); converted to **USD** with a rate **frozen per expense** |
 | 🔎 **RAG over invoices** | Postgres **pgvector** (HNSW, cosine) + full-text `tsvector`, merged with Reciprocal Rank Fusion; answers cite invoices `[#id]` |
 | 💬 **Ask AI with full control** | 14 tools: query totals, charts, compare periods, search, open, navigate, add, edit, split, delete, confirm, exchange rates, undo |
-| 🎙️ **Voice** | Push-to-talk with on-device Apple Speech (Arabic / English) |
+| 🎙️ **Voice** | Tap the mic and talk to **Wallet**. Local **Whisper large-v3 turbo** (WhisperKit, Core ML) transcribes Arabic, including Egyptian, and English on-device and picks the language automatically (~1 s per command) |
 | 📊 **Charts** | Swift Charts, by day, month, year, category or vendor; bar, line or donut |
 | ↩️ **Undo everything** | Every write is one transaction plus an audit row with its inverse operation; AI writes need a **Confirm** click |
 
@@ -27,9 +29,9 @@
 
 ## Screenshots
 
-| Ask for a chart | Arabic question + confirm card |
+| Talking to Wallet | Arabic question + confirm card |
 |---|---|
-| ![](docs/screenshots/ai-chart.png) | ![](docs/screenshots/ai-arabic-confirm.png) |
+| ![](docs/screenshots/wallet-conversation.png) | ![](docs/screenshots/ai-arabic-confirm.png) |
 | **RAG search with citations + period comparison** | **Needs review: items don't match the total** |
 | ![](docs/screenshots/ai-search-compare.png) | ![](docs/screenshots/review-mismatch.png) |
 | **Arabic invoice, auto-confirmed** | **Phone photo flagged as a duplicate** |
@@ -37,7 +39,7 @@
 
 ## Stack
 
-Swift 6 · SwiftUI · Swift Charts · **PostgreSQL 17 + pgvector 0.8.7** · PostgresNIO · Ollama (`qwen3.5:9b` for chat, tools and vision; `qwen3-embedding:0.6b`) · PDFKit · Apple Vision · Apple Speech · CryptoKit · Swift Testing
+Swift 6 · SwiftUI · Swift Charts · **PostgreSQL 17 + pgvector 0.8.7** · PostgresNIO · Ollama (`qwen3.5:9b` for chat, tools and vision; `qwen3-embedding:0.6b`) · PDFKit · Apple Vision · **WhisperKit** (`openai_whisper-large-v3-v20240930_turbo_632MB`, downloaded once on first mic use) · CryptoKit · Swift Testing
 
 ## Run it
 
@@ -56,13 +58,14 @@ Headless mode (the same pipeline, without the UI):
 build/Expenses.app/Contents/MacOS/ExpensesApp --ingest samples/*.pdf samples/*.png
 build/Expenses.app/Contents/MacOS/ExpensesApp --ask "How much did I spend last month?"
 build/Expenses.app/Contents/MacOS/ExpensesApp --list
+build/Expenses.app/Contents/MacOS/ExpensesApp --transcribe question.wav   # local Whisper, ar/en
 ```
 
 ## Tests
 
 ```bash
 createdb expenses_test && psql -d expenses_test -c "CREATE EXTENSION vector"
-swift test                                              # 41 tests, one Postgres schema per test
+swift test                                              # 43 tests, one Postgres schema per test
 EXPENSES_BENCH=1 swift test -c release --filter Scale   # 1,000,000-row benchmark
 scripts/clean_test_schemas.sh
 ```

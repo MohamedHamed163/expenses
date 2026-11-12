@@ -123,3 +123,17 @@ struct ExtractionParsingTests {
         #expect(extractJSONObject("no json here") == nil)
     }
 }
+
+@Suite("Voice language")
+struct VoiceLanguageTests {
+    @Test func usesDetectedLanguageWhenSupported() {
+        #expect(VoiceLanguage.choose(detected: "en", logProbs: ["en": -0.003]) == "en")
+        #expect(VoiceLanguage.choose(detected: "ar", logProbs: ["ar": -0.005]) == "ar")
+    }
+    @Test func logProbsMissingLanguageIsNotZero() {
+        // Regression: a missing key used to default to 0, which beats any log-prob and flipped the language.
+        #expect(VoiceLanguage.choose(detected: "fa", logProbs: ["fa": -0.2, "en": -3.0]) == "en")
+        #expect(VoiceLanguage.choose(detected: "fa", logProbs: ["fa": -0.2, "ar": -1.1, "en": -3.0]) == "ar")
+        #expect(VoiceLanguage.choose(detected: "ur", logProbs: ["ur": -0.1]) == "ar")
+    }
+}

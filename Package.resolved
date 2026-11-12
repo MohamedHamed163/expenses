@@ -1,5 +1,5 @@
 {
-  "originHash" : "cab7bf9171f8ea77cd88fd13c5b0af7ec8172f7b747bd8b5ee0ea7722a9f5e85",
+  "originHash" : "46c9d532eb7f4db8f0b8dda612ad83bdfa7ffd294ffc733c7e1b89d62a3d6a4d",
   "pins" : [
     {
       "identity" : "postgres-nio",
@@ -8,6 +8,15 @@
       "state" : {
         "revision" : "c7320acff7ba4034d8eb7acac2daf200855996d3",
         "version" : "1.33.3"
+      }
+    },
+    {
+      "identity" : "swift-argument-parser",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-argument-parser.git",
+      "state" : {
+        "revision" : "6a52f3251125d74daf04fcbd5e6f08a75d074382",
+        "version" : "1.8.2"
       }
     },
     {
@@ -53,6 +62,15 @@
       "state" : {
         "revision" : "da9d28d69ebe3894b18376c8f2395c2f37b8448f",
         "version" : "4.5.2"
+      }
+    },
+    {
+      "identity" : "swift-jinja",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/huggingface/swift-jinja.git",
+      "state" : {
+        "revision" : "1e4d0dc69f7ec1277131fb3853808229c5991825",
+        "version" : "2.5.2"
       }
     },
     {
@@ -116,6 +134,33 @@
       "state" : {
         "revision" : "869129b7bf4ecc57b97d0193ad29690ca2134750",
         "version" : "1.8.1"
+      }
+    },
+    {
+      "identity" : "swift-transformers",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/huggingface/swift-transformers.git",
+      "state" : {
+        "revision" : "150169bfba0889c229a2ce7494cf8949f18e6906",
+        "version" : "1.1.9"
+      }
+    },
+    {
+      "identity" : "whisperkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/argmaxinc/WhisperKit.git",
+      "state" : {
+        "revision" : "e2adabbe7d98dc4d0ab9a5b75424ecc42a9cdbef",
+        "version" : "0.18.0"
+      }
+    },
+    {
+      "identity" : "yyjson",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ibireme/yyjson.git",
+      "state" : {
+        "revision" : "8b4a38dc994a110abaec8a400615567bd996105f",
+        "version" : "0.12.0"
       }
     }
   ],

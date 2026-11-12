@@ -91,7 +91,7 @@ struct InvoicesView: View {
                 }
                 dropZone
             }
-            .frame(minWidth: 300, idealWidth: 340)
+            .frame(minWidth: 260, idealWidth: 320)
             Group {
                 if let id = model.selectedInvoiceID {
                     InvoiceDetailView(invoiceID: id).id("\(id)-\(model.revision)")
@@ -99,7 +99,7 @@ struct InvoicesView: View {
                     ContentUnavailableView("Select an invoice", systemImage: "doc.text.magnifyingglass", description: Text("Or drop PDFs and photos on the left."))
                 }
             }
-            .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+            .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
         }
         .navigationTitle("Invoices")
         .toolbar { Button { showImporter = true } label: { Label("Import", systemImage: "square.and.arrow.down") } }
@@ -182,8 +182,8 @@ struct InvoiceDetailView: View {
         Group {
             if let inv = invoice {
                 HSplitView {
-                    Preview(path: inv.filePath).frame(minWidth: 220, idealWidth: 360)
-                    ScrollView { form(inv).padding(16) }.frame(minWidth: 320)
+                    Preview(path: inv.filePath).frame(minWidth: 160, idealWidth: 300)
+                    ScrollView { form(inv).padding(16) }.frame(minWidth: 260)
                 }
             } else { ProgressView() }
         }
@@ -305,21 +305,26 @@ struct AnalyticsView: View {
         let a = model.analytics
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    Menu("Range: \(rangeText(a))") {
-                        ForEach(Preset.allCases) { p in Button(p.rawValue) { let r = p.range; model.analytics.from = r.0; model.analytics.to = r.1; reload() } }
-                    }.fixedSize()
-                    Picker("Group by", selection: $model.analytics.groupBy) {
-                        ForEach([GroupBy.day, .month, .year, .category, .vendor], id: \.self) { Text($0.rawValue.capitalized).tag($0) }
-                    }.fixedSize()
-                    Picker("Chart", selection: $model.analytics.kind) {
-                        ForEach(ChartKind.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
-                    }.pickerStyle(.segmented).fixedSize()
-                    Picker("Category", selection: $model.analytics.category) {
-                        Text("All categories").tag(String?.none)
-                        ForEach(model.categories) { Text($0.nameEN).tag(String?.some($0.key)) }
-                    }.fixedSize()
-                    Spacer()
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Menu("Range: \(rangeText(a))") {
+                            ForEach(Preset.allCases) { p in Button(p.rawValue) { let r = p.range; model.analytics.from = r.0; model.analytics.to = r.1; reload() } }
+                        }.fixedSize()
+                        Picker("Group by", selection: $model.analytics.groupBy) {
+                            ForEach([GroupBy.day, .month, .year, .category, .vendor], id: \.self) { Text($0.rawValue.capitalized).tag($0) }
+                        }.fixedSize()
+                        Spacer(minLength: 0)
+                    }
+                    HStack {
+                        Picker("Chart", selection: $model.analytics.kind) {
+                            ForEach(ChartKind.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
+                        }.pickerStyle(.segmented).fixedSize()
+                        Picker("Category", selection: $model.analytics.category) {
+                            Text("All categories").tag(String?.none)
+                            ForEach(model.categories) { Text($0.nameEN).tag(String?.some($0.key)) }
+                        }.fixedSize()
+                        Spacer(minLength: 0)
+                    }
                 }
                 .onChange(of: model.analytics.groupBy) { reload() }
                 .onChange(of: model.analytics.category) { reload() }

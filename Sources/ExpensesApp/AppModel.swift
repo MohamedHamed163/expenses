@@ -15,6 +15,7 @@ struct ChatItem: Identifiable, Hashable {
     var citations: [Int64] = []
     var unverified: [String] = []
     var trace: [String] = []
+    var viaVoice = false
 }
 
 struct ToolTable: Hashable, Identifiable {
@@ -70,7 +71,7 @@ final class AppModel {
     var revision = 0
 
     init() {
-        chat = [ChatItem(role: .notice, text: "Ask about your spending, or control the app: \"show last year by month\", \"كم صرفت الشهر ده؟\", \"add 12 dollars taxi yesterday\". Hold the mic to speak.")]
+        chat = []
     }
 
     func start() async {
@@ -193,10 +194,17 @@ final class AppModel {
 
     // MARK: - Chat
 
-    func send(_ text: String) async {
+    func newConversation() {
+        chat = []
+        Task { await assistant.reset() }
+    }
+
+    func send(_ text: String, viaVoice: Bool = false) async {
         let q = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty, !thinking else { return }
-        chat.append(ChatItem(role: .user, text: q))
+        var userItem = ChatItem(role: .user, text: q)
+        userItem.viaVoice = viaVoice
+        chat.append(userItem)
         thinking = true
         defer { thinking = false }
         do {
